@@ -33,10 +33,33 @@ function connect(): { client: MongoClient; ready: Promise<Db> } {
   return { client, ready };
 }
 
-if (!global.__turfMongo) global.__turfMongo = connect();
+/**
+ * One pooled client per process — but a FAILED connection is never kept.
+ *
+ * Caching the promise unconditionally means a single bad first attempt (Atlas
+ * refusing the TLS handshake because the IP was not yet allowed, a DNS blip on a
+ * cold start) is remembered for the life of the process: every later request
+ * awaits the same rejected promise and 500s, long after the cause is gone. On
+ * serverless that instance stays poisoned until the platform happens to recycle
+ * it. Dropping the entry on rejection lets the very next request dial again.
+ */
+function pool(): { client: MongoClient; ready: Promise<Db> } {
+  const existing = global.__turfMongo;
+  if (existing) return existing;
 
-export const mongoClient = global.__turfMongo.client;
-export const getDb = (): Promise<Db> => global.__turfMongo!.ready;
+  const created = connect();
+  global.__turfMongo = created;
+  created.ready.catch(() => {
+    // Only clear our own entry: a newer attempt may already have replaced it.
+    if (global.__turfMongo === created) global.__turfMongo = undefined;
+    void created.client.close().catch(() => {});
+  });
+  return created;
+}
+
+/** The pooled client, for starting sessions. Callers await {@link getDb} first. */
+export const getMongoClient = (): MongoClient => pool().client;
+export const getDb = (): Promise<Db> => pool().ready;
 
 export const collections = {
   locations: (db: Db) => db.collection<LocationDoc>("locations"),
@@ -50,16 +73,29 @@ export const collections = {
   rateLimits: (db: Db) => db.collection<RateLimitDoc>("rateLimits"),
 };
 
-let indexesEnsured = false;
+/**
+ * In flight or done. Held as a promise so concurrent callers share one attempt,
+ * and cleared on failure: the old boolean was set before the work finished, so a
+ * half-built set of indexes was remembered as complete and never retried.
+ */
+let indexesEnsured: Promise<void> | null = null;
 
 /**
  * The unique index on slotUnits is the backbone of double-booking prevention:
  * at most one document may ever exist per (locationId, date, startMin), so two
  * racing upserts for the same unit can never both insert.
  */
-export async function ensureIndexes(db: Db) {
-  if (indexesEnsured) return;
-  indexesEnsured = true;
+export function ensureIndexes(db: Db): Promise<void> {
+  if (!indexesEnsured) {
+    indexesEnsured = buildIndexes(db).catch((err) => {
+      indexesEnsured = null;
+      throw err;
+    });
+  }
+  return indexesEnsured;
+}
+
+async function buildIndexes(db: Db): Promise<void> {
   await Promise.all([
     collections.locations(db).createIndex({ slug: 1 }, { unique: true }),
     collections.locations(db).createIndex({ active: 1, name: 1 }),

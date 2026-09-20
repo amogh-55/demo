@@ -86,7 +86,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     service = await import("../src/lib/booking/service");
     collections = dbModule.collections;
     db = await dbModule.getDb();
-    closeClient = () => dbModule.mongoClient.close();
+    closeClient = () => dbModule.getMongoClient().close();
 
     // The suite owns this database outright, so it starts from a clean fixture.
     await Promise.all([

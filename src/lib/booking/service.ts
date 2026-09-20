@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { ObjectId, type ClientSession, type Db } from "mongodb";
-import { collections, getDb, isDuplicateKeyError, mongoClient } from "@/lib/db";
+import { collections, getDb, getMongoClient, isDuplicateKeyError } from "@/lib/db";
 import { appError, AppError } from "@/lib/errors";
 import { log } from "@/lib/log";
 import { daysFromToday, istDateString, istInstant, isValidBusinessDate } from "@/lib/time";
@@ -171,7 +171,7 @@ export async function getAvailability(
 
 async function withTransaction<T>(fn: (session: ClientSession, db: Db) => Promise<T>): Promise<T> {
   const db = await getDb();
-  const session = mongoClient.startSession();
+  const session = getMongoClient().startSession();
   try {
     // The driver retries TransientTransactionError and UnknownTransactionCommitResult.
     return await session.withTransaction(() => fn(session, db), {
