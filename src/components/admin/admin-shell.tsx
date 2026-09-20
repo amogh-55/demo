@@ -97,23 +97,25 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
           })}
         </nav>
         <div className="border-t border-ink-100 p-3">
-          <p className="px-3 pb-2 text-xs text-ink-500">
+          <p className="px-3 text-xs text-ink-500">
             Signed in as <span className="font-medium text-ink-700">{session.displayName}</span>
           </p>
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={signOut} disabled={signingOut}>
-            <LogOut className="h-4 w-4" aria-hidden="true" />
-            {signingOut ? "Signing out…" : "Sign out"}
-          </Button>
         </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b border-ink-200 bg-white px-4 lg:hidden">
-          <span className="font-semibold text-ink-900">Turf Admin</span>
-          <Button variant="ghost" size="sm" className="h-11" onClick={signOut} disabled={signingOut}>
-            <LogOut className="h-4 w-4" aria-hidden="true" />
-            Sign out
-          </Button>
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 bg-white px-4 sm:px-6">
+          {/* The sidebar already carries the name on a wide screen. */}
+          <span className="font-semibold text-ink-900 lg:hidden">Turf Admin</span>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="hidden text-sm text-ink-500 sm:inline">
+              Signed in as <span className="font-medium text-ink-700">{session.displayName}</span>
+            </span>
+            <Button variant="danger" size="sm" className="h-11 sm:h-9" onClick={signOut} disabled={signingOut}>
+              <LogOut className="h-4 w-4" aria-hidden="true" />
+              {signingOut ? "Signing out…" : "Sign out"}
+            </Button>
+          </div>
         </header>
 
         {/* The extra bottom padding clears the tab bar *and* the iOS home indicator under it. */}
