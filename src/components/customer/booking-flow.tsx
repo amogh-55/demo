@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, Clock, Copy, ImageUp, MapPin, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
-import { formatBusinessDate, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { PublicSlotStatus } from "@/lib/types";
 
@@ -523,9 +523,10 @@ export function BookingFlow({
                                 : "cursor-not-allowed border-white/5 bg-white/[0.02] text-ink-500",
                           )}
                         >
-                          {/* The time is the thing being chosen, so it reads at full size. */}
+                          {/* The full range, not just the start: "6 AM" alone reads as
+                              the whole booking and customers asked what they were buying. */}
                           <span className="block whitespace-nowrap text-base font-semibold">
-                            {formatMinutes(unit.startMin)}
+                            {formatCompactRange(unit.startMin, unit.endMin)}
                           </span>
                           <span className={cn("block text-sm", selected ? "text-ink-950/70" : "text-ink-300")}>
                             {available || selected ? formatCurrency(unit.price) : statusLabel(unit.status)}

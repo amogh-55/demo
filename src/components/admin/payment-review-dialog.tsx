@@ -53,9 +53,9 @@ export function PaymentReviewDialog({
   onOpenChange: (open: boolean) => void;
   busy: boolean;
   error: string | null;
-  onAccept: (attemptId: string, amount: number, note?: string) => void;
+  onAccept: (attemptId: string, amount: number, note: string | undefined, confirmBooking: boolean) => void;
   onReject: (attemptId: string, note: string) => void;
-  onRecord: (amount: number, note: string) => void;
+  onRecord: (amount: number, note: string, confirmBooking: boolean) => void;
 }) {
   const pending = booking?.payments.find((p) => p.status === "PENDING") ?? null;
   const [amount, setAmount] = React.useState("");
@@ -81,6 +81,13 @@ export function PaymentReviewDialog({
   const amountValid = Number.isFinite(parsed) && parsed > 0;
   const projectedPaid = booking.amountPaid + (amountValid ? parsed : 0);
   const projectedRemaining = booking.amount - projectedPaid;
+  /**
+   * Whether this payment clears the bill. When it does, the admin should not have
+   * to close the dialog and hunt for a second button — recording the money and
+   * accepting the booking are one intent. An underpaid booking still cannot be
+   * accepted, so the flag is false and the button stays a plain "Record payment".
+   */
+  const settlesInFull = mode === "ACCEPT" && amountValid && projectedRemaining <= 0;
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => (busy ? null : onOpenChange(next))}>
@@ -265,8 +272,8 @@ export function PaymentReviewDialog({
                         </>
                       ) : (
                         <>
-                          Paid in full{projectedRemaining < 0 ? ` (${formatCurrency(-projectedRemaining)} over)` : ""}. You
-                          can confirm the booking after this.
+                          Paid in full{projectedRemaining < 0 ? ` (${formatCurrency(-projectedRemaining)} over)` : ""}.
+                          Recording it <strong>accepts the booking</strong> in the same step.
                         </>
                       )}
                     </Alert>
@@ -312,10 +319,10 @@ export function PaymentReviewDialog({
               <Button
                 className="h-11"
                 disabled={busy || !amountValid || note.trim().length < 3}
-                onClick={() => onRecord(parsed, note.trim())}
+                onClick={() => onRecord(parsed, note.trim(), settlesInFull)}
               >
                 {busy ? <Spinner /> : null}
-                {busy ? "Saving…" : `Record ${amountValid ? formatCurrency(parsed) : "payment"}`}
+                {busy ? "Saving…" : settlesInFull ? "Record & accept booking" : `Record ${amountValid ? formatCurrency(parsed) : "payment"}`}
               </Button>
             ) : (
               <Button
@@ -324,12 +331,18 @@ export function PaymentReviewDialog({
                 disabled={busy || (mode === "ACCEPT" ? !amountValid : note.trim().length < 3)}
                 onClick={() =>
                   mode === "ACCEPT"
-                    ? onAccept(pending.id, parsed, note.trim() || undefined)
+                    ? onAccept(pending.id, parsed, note.trim() || undefined, settlesInFull)
                     : onReject(pending.id, note.trim())
                 }
               >
                 {busy ? <Spinner /> : null}
-                {busy ? "Saving…" : mode === "ACCEPT" ? "Record payment" : "Mark not valid"}
+                {busy
+                  ? "Saving…"
+                  : mode === "REJECT"
+                    ? "Mark not valid"
+                    : settlesInFull
+                      ? "Record & accept booking"
+                      : "Record payment"}
               </Button>
             )}
           </div>

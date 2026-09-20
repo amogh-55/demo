@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   daysFromToday,
   formatBusinessDate,
+  formatCompactRange,
   formatMinutes,
   formatRange,
   istDateString,
@@ -67,5 +68,25 @@ describe("IST business time", () => {
     assert.equal(minutesToDuration(60), "1 hour");
     assert.equal(minutesToDuration(120), "2 hours");
     assert.equal(minutesToDuration(90), "1h 30m");
+  });
+});
+
+describe("formatCompactRange", () => {
+  it("says the meridiem once when both ends share it", () => {
+    assert.equal(formatCompactRange(6 * 60, 7 * 60), "6 – 7 AM");
+    assert.equal(formatCompactRange(20 * 60, 21 * 60), "8 – 9 PM");
+  });
+
+  it("spells out both sides when the range crosses midday or midnight", () => {
+    assert.equal(formatCompactRange(11 * 60, 12 * 60), "11 AM – 12 PM");
+    assert.equal(formatCompactRange(23 * 60, 24 * 60), "11 PM – 12 AM");
+  });
+
+  it("keeps the minutes when a slot does not start on the hour", () => {
+    assert.equal(formatCompactRange(6 * 60 + 30, 7 * 60 + 30), "6:30 – 7:30 AM");
+  });
+
+  it("renders midnight as 12, never 0", () => {
+    assert.equal(formatCompactRange(0, 60), "12 – 1 AM");
   });
 });

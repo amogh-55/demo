@@ -1,5 +1,17 @@
 import type { Metadata, Viewport } from "next";
+import { Poppins } from "next/font/google";
 import "./globals.css";
+
+/**
+ * Self-hosted by Next at build time, so there is no request to Google at runtime
+ * and no layout shift while it loads. Only the weights actually used are shipped.
+ */
+const poppins = Poppins({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-poppins",
+  display: "swap",
+});
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 const businessName = process.env.NEXT_PUBLIC_BUSINESS_NAME || "Cricket Turf Arena";
@@ -36,7 +48,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en-IN">
+    <html lang="en-IN" className={poppins.variable}>
       {/* The dark surface comes from globals.css, so an overscroll bounce does not
           flash white; the admin shell paints itself light on top. */}
       <body className="min-h-dvh">

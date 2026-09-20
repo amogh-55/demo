@@ -106,8 +106,34 @@ export function LocationsManager({ initialLocations }: { initialLocations: Admin
         </ul>
       </section>
 
+      {locations.length > 1 ? (
+        <section className="card">
+          <label className="field-label" htmlFor="editing-location">
+            Editing
+          </label>
+          {/* The list above is selectable too, but a name that turns green when
+              tapped does not read as a control — people assumed the editor below
+              was stuck on whichever ground happened to be first. */}
+          <select
+            id="editing-location"
+            className="field-input"
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+          >
+            {locations.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-xs text-ink-500">
+            Details, hours and pricing below apply to this ground only.
+          </p>
+        </section>
+      ) : null}
+
       {selected ? <LocationEditor key={selected.id} location={selected} onSaved={refresh} /> : null}
-      {selected ? <ScheduleEditor locationId={selected.id} locationName={selected.name} /> : null}
+      {selected ? <ScheduleEditor key={selected.id} locationId={selected.id} locationName={selected.name} /> : null}
     </div>
   );
 }
@@ -246,37 +272,11 @@ function ScheduleEditor({ locationId, locationName }: { locationId: string; loca
             ))}
           </select>
         </div>
-        <div>
-          <label className="field-label" htmlFor="slot-minutes">
-            Slot length
-          </label>
-          <select
-            id="slot-minutes"
-            className="field-input"
-            value={config.slotMinutes}
-            onChange={(e) => update({ slotMinutes: Number(e.target.value) })}
-          >
-            {[30, 60, 90, 120].map((m) => (
-              <option key={m} value={m}>
-                {m} minutes
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="field-label" htmlFor="hold-minutes">
-            Hold duration
-          </label>
-          <input
-            id="hold-minutes"
-            type="number"
-            min={2}
-            max={60}
-            className="field-input"
-            value={config.holdMinutes}
-            onChange={(e) => update({ holdMinutes: Number(e.target.value) })}
-          />
-        </div>
+        {/* Slot length and hold duration are deliberately not editable here. Both
+            are load-bearing — slot length is the unit the double-booking index is
+            built on, and changing it against existing bookings would split or merge
+            the very rows that guarantee one booking per hour. They keep their saved
+            values, which are still sent on save. */}
         <div>
           <label className="field-label" htmlFor="window-days">
             Booking window (days ahead)

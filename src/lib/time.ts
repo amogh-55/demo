@@ -68,6 +68,29 @@ export function formatMinutes(minuteOfDay: number): string {
   return `${h12}:${String(mm).padStart(2, "0")} ${suffix}`;
 }
 
+/**
+ * "6 – 7 AM", or "11 AM – 12 PM" when the range crosses midday.
+ *
+ * A slot button on a phone is about half the screen wide, so the full
+ * "6:00 AM – 7:00 AM" wraps. Dropping the :00 and saying AM once where both ends
+ * agree keeps the whole range on one line, which is what stops customers reading
+ * a single start time as the whole booking.
+ */
+export function formatCompactRange(startMin: number, endMin: number): string {
+  const part = (minuteOfDay: number) => {
+    const total = ((minuteOfDay % MINUTES_IN_DAY) + MINUTES_IN_DAY) % MINUTES_IN_DAY;
+    const h24 = Math.floor(total / 60);
+    const mm = total % 60;
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    return { clock: mm === 0 ? `${h12}` : `${h12}:${String(mm).padStart(2, "0")}`, suffix: h24 >= 12 ? "PM" : "AM" };
+  };
+  const from = part(startMin);
+  const to = part(endMin);
+  return from.suffix === to.suffix
+    ? `${from.clock} – ${to.clock} ${to.suffix}`
+    : `${from.clock} ${from.suffix} – ${to.clock} ${to.suffix}`;
+}
+
 /** "5:00 PM – 7:00 PM" */
 export function formatRange(startMin: number, endMin: number): string {
   return `${formatMinutes(startMin)} – ${formatMinutes(endMin)}`;

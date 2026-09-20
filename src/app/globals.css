@@ -4,7 +4,9 @@
 
 @layer base {
   :root {
-    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    /* Poppins is loaded in layout.tsx; the stack behind it covers the moment
+       before the webfont is ready and any device that refuses it. */
+    --font-sans: var(--font-poppins), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
 
   html {

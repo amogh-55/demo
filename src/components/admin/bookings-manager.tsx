@@ -117,8 +117,16 @@ export function BookingsManager({
     }
   }
 
-  /** Recording money never touches the slots — that is the whole point. */
-  async function reviewPayment(booking: AdminBooking, body: Record<string, unknown>) {
+  /**
+   * Recording money never touches the slots — that is the whole point.
+   *
+   * `thenConfirm` accepts the booking in the same press when the payment clears
+   * the bill, so the admin is not sent back to the list to find a second button.
+   * It is a second request rather than one combined endpoint: if it fails the
+   * money is still safely recorded and the booking simply stays pending, which is
+   * exactly the state the "Accept booking" button already handles.
+   */
+  async function reviewPayment(booking: AdminBooking, body: Record<string, unknown>, thenConfirm = false) {
     setBusyId(booking.id);
     setActionError(null);
     try {
@@ -127,10 +135,22 @@ export function BookingsManager({
         body: JSON.stringify(body),
       });
       const remaining = result.booking.amountRemaining;
+
+      let confirmed = false;
+      if (thenConfirm && remaining <= 0) {
+        await api(`/api/admin/bookings/${booking.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ action: "CONFIRM" }),
+        });
+        confirmed = true;
+      }
+
       setNotice(
         remaining > 0
           ? `${booking.reference}: ${formatCurrency(remaining)} still outstanding. The slots are still reserved.`
-          : `${booking.reference}: paid in full. You can confirm the booking now.`,
+          : confirmed
+            ? `${booking.reference}: paid in full and confirmed.`
+            : `${booking.reference}: paid in full. You can confirm the booking now.`,
       );
       setReviewing(null);
       await load();
@@ -344,13 +364,16 @@ export function BookingsManager({
         onOpenChange={() => setReviewing(null)}
         busy={busyId !== null}
         error={actionError}
-        onAccept={(attemptId, amount, note) =>
-          reviewing && void reviewPayment(reviewing, { action: "ACCEPT_PAYMENT", attemptId, amount, note })
+        onAccept={(attemptId, amount, note, confirmBooking) =>
+          reviewing &&
+          void reviewPayment(reviewing, { action: "ACCEPT_PAYMENT", attemptId, amount, note }, confirmBooking)
         }
         onReject={(attemptId, note) =>
           reviewing && void reviewPayment(reviewing, { action: "REJECT_PAYMENT", attemptId, note })
         }
-        onRecord={(amount, note) => reviewing && void reviewPayment(reviewing, { action: "RECORD_PAYMENT", amount, note })}
+        onRecord={(amount, note, confirmBooking) =>
+          reviewing && void reviewPayment(reviewing, { action: "RECORD_PAYMENT", amount, note }, confirmBooking)
+        }
       />
 
       <ConfirmDialog
@@ -465,27 +488,33 @@ function BookingCard({
         </dl>
       </div>
 
-      {/* When and where, on one line: the owner reads these together, and the
-          duration is already implied by the time range. */}
-      <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-        <span className="font-medium text-ink-900">{formatBusinessDate(booking.date)}</span>
-        <span className="text-ink-300" aria-hidden="true">|</span>
-        <span className="font-medium text-ink-900">{formatRange(booking.startMin, booking.endMin)}</span>
-        <span className="text-ink-400">({minutesToDuration(booking.endMin - booking.startMin)})</span>
-        <span className="text-ink-300" aria-hidden="true">|</span>
-        <span className="min-w-0 break-words text-ink-600">{booking.locationName}</span>
-      </p>
-
-      <p className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
-        <span className="text-base font-bold text-ink-900">{formatCurrency(booking.amount)}</span>
-        {booking.amountPaid > 0 ? (
-          <span className={cn("font-medium", paidInFull ? "text-green-700" : "text-amber-700")}>
-            {formatCurrency(booking.amountPaid)} received
-          </span>
-        ) : (
-          <span className="text-ink-500">nothing received yet</span>
-        )}
-      </p>
+      {/* The slot and the money are what the owner is deciding on, so they sit in
+          their own band rather than as two more lines of running text. */}
+      <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-lg bg-ink-50 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-[15px] font-semibold leading-tight text-ink-900">
+            {formatRange(booking.startMin, booking.endMin)}
+            <span className="ml-1.5 text-xs font-normal text-ink-500">
+              ({minutesToDuration(booking.endMin - booking.startMin)})
+            </span>
+          </p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-ink-600">
+            <span className="font-medium">{formatBusinessDate(booking.date)}</span>
+            <span className="text-ink-300" aria-hidden="true">·</span>
+            <span className="min-w-0 break-words">{booking.locationName}</span>
+          </p>
+        </div>
+        <p className="flex shrink-0 flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="text-lg font-bold leading-none text-ink-900">{formatCurrency(booking.amount)}</span>
+          {booking.amountPaid > 0 ? (
+            <span className={cn("text-xs font-semibold", paidInFull ? "text-green-700" : "text-amber-700")}>
+              {formatCurrency(booking.amountPaid)} received
+            </span>
+          ) : (
+            <span className="text-xs text-ink-500">nothing received</span>
+          )}
+        </p>
+      </div>
 
       {partPaid ? (
         <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
