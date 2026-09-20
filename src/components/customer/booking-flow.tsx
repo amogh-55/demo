@@ -66,6 +66,8 @@ interface AvailabilityResponse {
   slotMinutes: number;
   holdMinutes: number;
   dayBlocked: boolean;
+  /** This date is charged at the ground's weekend rates. */
+  weekendRate?: boolean;
   units: AvailabilityUnit[];
   oversPerSlot: number;
   oversLadder: number[];
@@ -799,8 +801,15 @@ export function BookingFlow({
           <section aria-labelledby="slots-heading" className="card">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
-                <h2 id="slots-heading" className="text-lg font-semibold text-white">
+                <h2 id="slots-heading" className="flex flex-wrap items-center gap-2 text-lg font-semibold text-white">
                   4. {isOvers ? "Choose your session" : "Choose your time"}
+                  {/* Says why the evening costs more than it did on Tuesday, before
+                      the customer gets to the total and wonders. */}
+                  {availability?.weekendRate ? (
+                    <span className="rounded-full border border-lime-400/40 bg-lime-400/10 px-2 py-0.5 text-xs font-semibold text-lime-300">
+                      Weekend rates
+                    </span>
+                  ) : null}
                 </h2>
                 {/* Named again here: the cards above scroll out of view on a phone,
                     and booking the wrong thing at the wrong ground is an easy mistake. */}

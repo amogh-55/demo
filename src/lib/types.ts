@@ -118,6 +118,25 @@ export interface FacilityConfig {
    * type carries the real price. Maintained server-side so it cannot drift.
    */
   priceRules: PriceRule[];
+  /**
+   * The same bands again for the days that cost more, or empty for a ground that
+   * charges the same all week.
+   *
+   * Kept as a separate table rather than a multiplier or a flag on each band,
+   * because that is how the owner thinks about it and how the board at the gate
+   * reads: two columns, weekday and weekend, each with its own hours and prices.
+   * Empty means every day uses {@link priceRules}, which is what every existing
+   * facility has.
+   */
+  weekendPriceRules?: PriceRule[];
+  /**
+   * Which days the weekend table applies to. 0 Sunday … 6 Saturday.
+   *
+   * Configurable because "the weekend" is a local fact, not a calendar one: the
+   * grounds around here charge more from Friday evening, and a ground that fills
+   * up on Wednesdays should be able to say so.
+   */
+  weekendDays?: number[];
   /** How many days ahead customers may book (0 = today only). */
   bookingWindowDays: number;
   /** Temporary hold lifetime, minutes. */

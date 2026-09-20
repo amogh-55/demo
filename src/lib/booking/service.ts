@@ -4,7 +4,7 @@ import { ObjectId, type ClientSession, type Db } from "mongodb";
 import { collections, getDb, getMongoClient, isDuplicateKeyError } from "@/lib/db";
 import { appError, AppError } from "@/lib/errors";
 import { log } from "@/lib/log";
-import { deletePaymentScreenshot } from "@/lib/storage";
+import { deletePaymentScreenshot, listStoredScreenshots, type StoredScreenshot } from "@/lib/storage";
 import { daysFromToday, istDateString, istInstant, isValidBusinessDate } from "@/lib/time";
 import type {
   BallType,
@@ -23,6 +23,7 @@ import {
   applyBallPricing,
   buildDayTemplate,
   findBallType,
+  isWeekendRate,
   oversLadder,
   resolveUnits,
   slotsForOvers,
@@ -51,6 +52,9 @@ export const DEFAULT_HOURLY_CONFIG: FacilityConfig = {
     { fromMin: 6 * 60, toMin: 17 * 60, price: 800 },
     { fromMin: 17 * 60, toMin: 23 * 60, price: 1200 },
   ],
+  // Empty until the owner sets weekend prices, which means one price all week.
+  weekendPriceRules: [],
+  weekendDays: [5, 6, 0],
   oversPerSlot: 0,
   payAtVenueMaxOvers: 0,
   ballTypes: [],
@@ -71,6 +75,9 @@ export const DEFAULT_OVERS_CONFIG: FacilityConfig = {
   // Price 0 across the window: the ball type carries the price, and this rule
   // exists only to mark the hours as sellable.
   priceRules: [{ fromMin: 6 * 60, toMin: 23 * 60, price: 0 }],
+  // A bowling session is priced by its ball, so there is no weekday/weekend table.
+  weekendPriceRules: [],
+  weekendDays: [5, 6, 0],
   oversPerSlot: 10,
   payAtVenueMaxOvers: 40,
   ballTypes: [
@@ -104,7 +111,16 @@ export interface ResourceContext {
   facility: FacilityDoc;
   resource: ResourceDoc;
   config: FacilityConfig;
+  /** The weekday shape of the day. For anything that takes money, use {@link templateFor}. */
   template: SlotUnitTemplate[];
+  /**
+   * The day as it is actually priced on a given date.
+   *
+   * Separate from `template` because a ground can charge more at the weekend, so
+   * a price is only correct once the date is known. Every path that quotes, holds
+   * or charges goes through this; the plain template is for shape alone.
+   */
+  templateFor: (date?: string) => SlotUnitTemplate[];
 }
 
 /**
@@ -134,7 +150,14 @@ export async function loadResourceContext(
   }
 
   const config = facility.config;
-  return { location, facility, resource, config, template: buildDayTemplate(config) };
+  return {
+    location,
+    facility,
+    resource,
+    config,
+    template: buildDayTemplate(config),
+    templateFor: (date?: string) => buildDayTemplate(config, date),
+  };
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -149,6 +172,8 @@ export interface AvailabilityUnit {
 }
 
 export interface AvailabilityResult {
+  /** True when this date is charged at the ground's weekend rates. */
+  weekendRate?: boolean;
   resourceId: string;
   resourceName: string;
   facilityId: string;
@@ -218,8 +243,9 @@ export async function getAvailability(
   now: Date = new Date(),
 ): Promise<AvailabilityResult> {
   const db = await getDb();
-  const { location, facility, resource, config, template } = await loadResourceContext(db, resourceId, true);
+  const { location, facility, resource, config, templateFor } = await loadResourceContext(db, resourceId, true);
   assertBookableDate(date, config.bookingWindowDays, now);
+  const template = templateFor(date);
 
   const [stored, dayBlock] = await Promise.all([
     collections.slotUnits(db).find({ resourceId, date }).toArray(),
@@ -252,6 +278,9 @@ export async function getAvailability(
     slotMinutes: config.slotMinutes,
     holdMinutes: config.holdMinutes,
     dayBlocked: Boolean(dayBlock),
+    // Told to the customer rather than left to be noticed in the total: a Saturday
+    // evening costing more than a Tuesday one is a price list, not a mistake.
+    weekendRate: isWeekendRate(config, date),
     units,
     oversPerSlot: isOvers ? config.oversPerSlot : 0,
     oversLadder: isOvers
@@ -355,8 +384,11 @@ interface ResolvedRequest {
  * costs. Called again at submission time so a schedule edited mid-booking is
  * caught rather than honoured.
  */
-function resolveRequest(ctx: ResourceContext, input: BookingRequest): ResolvedRequest {
-  const { config, facility, template } = ctx;
+function resolveRequest(ctx: ResourceContext, input: BookingRequest, date: string): ResolvedRequest {
+  const { config, facility } = ctx;
+  // The date decides which price table applies, so it is resolved here rather
+  // than carried in from a template built before anyone knew the day.
+  const template = ctx.templateFor(date);
 
   if (facility.kind === "OVERS") {
     if (config.ballTypes.length === 0 || config.oversPerSlot <= 0) {
@@ -445,7 +477,7 @@ export async function createHold(
   if (input.bypassWindow) assertNotPast(input.date, now);
   else assertBookableDate(input.date, config.bookingWindowDays, now);
 
-  const { startMin, endMin, units, overs, ballType } = resolveRequest(ctx, input);
+  const { startMin, endMin, units, overs, ballType } = resolveRequest(ctx, input, input.date);
 
   if (istInstant(input.date, startMin).getTime() <= now.getTime()) {
     throw appError("PAST_DATE", "That time has already passed. Please pick an upcoming slot.");
@@ -745,7 +777,8 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   const resourceId = units[0]!.resourceId;
   const date = units[0]!.date;
   const ctx = await loadResourceContext(db, resourceId, true);
-  const { location, facility, resource, config, template } = ctx;
+  const { location, facility, resource, config } = ctx;
+  const template = ctx.templateFor(date);
 
   // Price is recomputed from the server-side schedule; the browser never supplies it.
   const startMin = units[0]!.startMin;
@@ -1830,6 +1863,73 @@ export const SCREENSHOT_RETAIN_DAYS = 7;
  * Safe to run repeatedly: a booking is only marked once its files are actually
  * gone, and deleting an object that has already been deleted is not an error.
  */
+/**
+ * Which stored files nothing is going to claim.
+ *
+ * Pure, and separate from the storage call, so the rule can be tested without a
+ * bucket: a file is only an orphan once it is old enough that any booking it
+ * could have belonged to would long since have been submitted. A hold lives five
+ * minutes, so a day is not a close call — it only ever catches uploads that were
+ * genuinely abandoned.
+ */
+export function selectOrphanScreenshots(
+  stored: StoredScreenshot[],
+  referenced: Set<string>,
+  cutoff: Date,
+): StoredScreenshot[] {
+  return stored.filter((file) => !referenced.has(file.key) && file.uploadedAt.getTime() < cutoff.getTime());
+}
+
+/**
+ * Delete screenshots that belong to no booking at all.
+ *
+ * The other purge walks bookings and removes the images of games already played.
+ * This one walks the STORE, because a customer who uploads a screenshot and then
+ * abandons the payment screen leaves a file that no booking names — invisible to
+ * anything looking at the database, and paid for every month regardless.
+ */
+export async function purgeOrphanScreenshots(input?: {
+  /** How old an unclaimed file must be before it counts as abandoned. */
+  minAgeHours?: number;
+  now?: Date;
+}): Promise<{ scanned: number; deleted: number; failed: number }> {
+  const now = input?.now ?? new Date();
+  const cutoff = new Date(now.getTime() - (input?.minAgeHours ?? 24) * 3_600_000);
+
+  const stored = await listStoredScreenshots();
+  if (stored.length === 0) return { scanned: 0, deleted: 0, failed: 0 };
+
+  const db = await getDb();
+  const bookings = await collections
+    .bookings(db)
+    .find({}, { projection: { paymentScreenshotKey: 1, "payments.screenshotKey": 1 } })
+    .toArray();
+
+  const referenced = new Set<string>();
+  for (const booking of bookings) {
+    if (booking.paymentScreenshotKey) referenced.add(booking.paymentScreenshotKey);
+    for (const attempt of booking.payments ?? []) {
+      if (attempt.screenshotKey) referenced.add(attempt.screenshotKey);
+    }
+  }
+
+  const orphans = selectOrphanScreenshots(stored, referenced, cutoff);
+  let deleted = 0;
+  let failed = 0;
+  for (const file of orphans) {
+    try {
+      await deletePaymentScreenshot(file.key);
+      deleted += 1;
+    } catch (err) {
+      failed += 1;
+      log.warn("orphan_screenshot_delete_failed", { key: file.key, error: (err as Error).message });
+    }
+  }
+
+  log.info("orphan_screenshots_purged", { scanned: stored.length, deleted, failed });
+  return { scanned: stored.length, deleted, failed };
+}
+
 export async function purgeExpiredScreenshots(input?: {
   retainDays?: number;
   now?: Date;

@@ -26,7 +26,10 @@ export async function GET(request: Request) {
     const resourceId = new ObjectId(rawId);
     const db = await getDb();
     // Inactive resources still need managing, so activity is not required here.
-    const { location, facility, resource, config, template } = await loadResourceContext(db, resourceId, false);
+    const context = await loadResourceContext(db, resourceId, false);
+    const { location, facility, resource, config } = context;
+    // Priced for the day being looked at: a Saturday costs what Saturdays cost.
+    const template = context.templateFor(date);
 
     const now = new Date();
     const [stored, dayBlock] = await Promise.all([

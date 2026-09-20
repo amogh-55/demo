@@ -2266,6 +2266,161 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
   });
 
+  describe("abandoned screenshots", () => {
+    const file = (key: string, hoursAgo: number) => ({
+      key,
+      size: 1024,
+      uploadedAt: new Date(Date.now() - hoursAgo * 3_600_000),
+    });
+
+    it("sweeps up a file no booking ever claimed", () => {
+      const stored = [file("payment-screenshots/2026-01-01/a.jpg", 48)];
+      const orphans = service.selectOrphanScreenshots(stored, new Set(), new Date(Date.now() - 86_400_000));
+      assert.equal(orphans.length, 1);
+    });
+
+    it("never touches one a booking still names", () => {
+      const key = "payment-screenshots/2026-01-01/b.jpg";
+      const orphans = service.selectOrphanScreenshots(
+        [file(key, 999)],
+        new Set([key]),
+        new Date(Date.now() - 86_400_000),
+      );
+      assert.equal(orphans.length, 0, "a screenshot in use is the retention job's business, not this one");
+    });
+
+    /** A hold lives five minutes; a file uploaded minutes ago may still become a booking. */
+    it("leaves a fresh upload alone while the customer is still paying", () => {
+      const orphans = service.selectOrphanScreenshots(
+        [file("payment-screenshots/2026-01-01/c.jpg", 0.2)],
+        new Set(),
+        new Date(Date.now() - 86_400_000),
+      );
+      assert.equal(orphans.length, 0);
+    });
+  });
+
+  describe("weekend pricing", () => {
+    /** The first date at least `minDays` out that falls on `weekday` (0 Sunday). */
+    function nextDateOn(weekday: number, minDays = 1): string {
+      for (let offset = minDays; offset < minDays + 8; offset += 1) {
+        const date = futureDate(offset);
+        if (new Date(`${date}T00:00:00Z`).getUTCDay() === weekday) return date;
+      }
+      throw new Error("no such date inside the booking window");
+    }
+
+    const WEEKEND_CONFIG = {
+      ...SCHEDULE,
+      weekendPriceRules: [
+        { fromMin: 17 * 60, toMin: 19 * 60, price: 1600 },
+        { fromMin: 19 * 60, toMin: 23 * 60, price: 1800 },
+      ],
+      weekendDays: [5, 6, 0],
+    };
+
+    beforeEach(async () => {
+      await collections.facilities(db).updateOne({ _id: FACILITY_ID }, { $set: { config: WEEKEND_CONFIG } });
+    });
+
+    after(async () => {
+      await collections.facilities(db).updateOne({ _id: FACILITY_ID }, { $set: { config: SCHEDULE } });
+    });
+
+    it("quotes weekend prices on a Saturday and weekday prices on a Tuesday", async () => {
+      const saturday = await service.getAvailability(RESOURCE_ID, nextDateOn(6, 2));
+      const tuesday = await service.getAvailability(RESOURCE_ID, nextDateOn(2, 2));
+
+      assert.equal(saturday.units.find((u) => u.startMin === 1020)!.price, 1600);
+      assert.equal(tuesday.units.find((u) => u.startMin === 1020)!.price, 800);
+      assert.equal(saturday.weekendRate, true);
+      assert.equal(tuesday.weekendRate, false);
+    });
+
+    it("holds and charges the weekend price, not the weekday one", async () => {
+      const date = nextDateOn(6, 2);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 });
+      // 5–6 at 1600 and 6–7 at 1600: both inside the weekend evening band.
+      assert.equal(hold.amount, 3200);
+
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      assert.equal(booking.amount, 3200, "the booking is charged what it was quoted");
+      assert.ok(booking.priceBreakdown.every((b) => b.price === 1600));
+    });
+
+    it("prices a session that spans both weekend bands", async () => {
+      const date = nextDateOn(0, 2); // Sunday
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1080, endMin: 1200 });
+      // 6–7 PM at 1600, 7–8 PM at 1800.
+      assert.equal(hold.amount, 3400);
+      await service.releaseHold(hold.holdToken);
+    });
+
+    it("charges the weekday price on a day the owner did not call a weekend", async () => {
+      await collections.facilities(db).updateOne(
+        { _id: FACILITY_ID },
+        { $set: { "config.weekendDays": [6] } }, // Saturday only
+      );
+      const friday = await service.getAvailability(RESOURCE_ID, nextDateOn(5, 2));
+      assert.equal(friday.units.find((u) => u.startMin === 1020)!.price, 800);
+      const saturday = await service.getAvailability(RESOURCE_ID, nextDateOn(6, 2));
+      assert.equal(saturday.units.find((u) => u.startMin === 1020)!.price, 1600);
+    });
+
+    it("keeps one price all week once the weekend table is cleared", async () => {
+      await collections.facilities(db).updateOne(
+        { _id: FACILITY_ID },
+        { $set: { "config.weekendPriceRules": [] } },
+      );
+      const saturday = await service.getAvailability(RESOURCE_ID, nextDateOn(6, 2));
+      assert.equal(saturday.units.find((u) => u.startMin === 1020)!.price, 800);
+      assert.equal(saturday.weekendRate, false);
+    });
+
+    /** A price list edited mid-booking must not change what the customer was quoted. */
+    it("charges what was quoted even if the weekend prices change during the hold", async () => {
+      const date = nextDateOn(6, 2);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      assert.equal(hold.amount, 1600);
+
+      await collections.facilities(db).updateOne(
+        { _id: FACILITY_ID },
+        { $set: { "config.weekendPriceRules.0.price": 9999 } },
+      );
+
+      // The schedule is re-read at submission, so the new price is what applies —
+      // and the customer is told rather than quietly charged the old one.
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      assert.equal(booking.amount, 9999, "submission re-prices from the live schedule");
+    });
+
+    it("lets the owner take a phone booking at the weekend price", async () => {
+      const date = nextDateOn(6, 3);
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date,
+        startMin: 1140,
+        endMin: 1200,
+        customerName: "Phone Caller",
+        customerPhone: "9876543210",
+        admin: ADMIN,
+      });
+      assert.equal(booking.amount, 1800, "7–8 PM on a Saturday");
+    });
+  });
+
   /* ── Database consistency after everything above ───────────────────── */
 
 

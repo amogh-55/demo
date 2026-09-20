@@ -316,6 +316,17 @@ export const facilityConfigSchema = z
     openMin: minuteOfDaySchema,
     closeMin: minuteOfDaySchema,
     priceRules: z.array(priceRuleSchema).min(1, "Add at least one price band"),
+    /**
+     * The weekend table. Empty is the normal case and means one price all week,
+     * so a ground that never charged differently is untouched by any of this.
+     */
+    weekendPriceRules: z.array(priceRuleSchema).default([]),
+    /** 0 Sunday … 6 Saturday. Around here the weekend starts on Friday. */
+    weekendDays: z
+      .array(z.number().int().min(0).max(6))
+      .max(7)
+      .default([5, 6, 0])
+      .refine((days) => new Set(days).size === days.length, "Each day can only be listed once"),
     bookingWindowDays: z.number().int().min(0).max(365),
     holdMinutes: z.number().int().min(2).max(60),
     /** OVERS only: how many overs one slot buys. 0 for hourly facilities. */
@@ -336,6 +347,26 @@ export const facilityConfigSchema = z
   .refine((c) => new Set(c.ballTypes.map((b) => b.id)).size === c.ballTypes.length, {
     message: "Each ball type needs its own id",
     path: ["ballTypes"],
+  })
+  /**
+   * Weekend prices that cover fewer hours than the weekday ones would make part
+   * of a Saturday unsellable — the slot simply vanishes from the grid, which
+   * reads as a bug rather than as a pricing decision.
+   */
+  .refine(
+    (c) =>
+      c.weekendPriceRules.length === 0 ||
+      c.priceRules.every((weekday) =>
+        c.weekendPriceRules.some((weekend) => weekend.fromMin <= weekday.fromMin && weekend.toMin >= weekday.toMin),
+      ),
+    {
+      message: "Weekend bands must cover the same hours as the weekday ones, or a weekend slot would be unsellable",
+      path: ["weekendPriceRules"],
+    },
+  )
+  .refine((c) => c.weekendPriceRules.length === 0 || c.weekendDays.length > 0, {
+    message: "Choose which days the weekend prices apply to",
+    path: ["weekendDays"],
   });
 
 export const settingsSchema = z.object({

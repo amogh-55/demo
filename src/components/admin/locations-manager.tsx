@@ -36,6 +36,10 @@ interface FacilityConfig {
   openMin: number;
   closeMin: number;
   priceRules: PriceRule[];
+  /** Empty for a ground that charges the same every day, which is the usual case. */
+  weekendPriceRules?: PriceRule[];
+  /** Which days the weekend table covers: 0 Sunday … 6 Saturday. */
+  weekendDays?: number[];
   bookingWindowDays: number;
   holdMinutes: number;
   oversPerSlot: number;
@@ -641,19 +645,49 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
   );
 }
 
-function HourlyPricing({
-  config,
-  update,
+/** 0 Sunday … 6 Saturday, in the order a week is spoken. */
+const WEEK = [
+  { day: 1, label: "Mon" },
+  { day: 2, label: "Tue" },
+  { day: 3, label: "Wed" },
+  { day: 4, label: "Thu" },
+  { day: 5, label: "Fri" },
+  { day: 6, label: "Sat" },
+  { day: 0, label: "Sun" },
+];
+
+/**
+ * One table of price bands.
+ *
+ * Written once and rendered twice — weekdays and weekends — because they are the
+ * same thing charged on different days, and two copies of this would be two
+ * places for a rounding rule or a time format to drift apart.
+ */
+function PriceBands({
+  idPrefix,
+  title,
+  description,
+  rules,
+  openMin,
+  closeMin,
+  onChange,
+  minBands = 1,
 }: {
-  config: FacilityConfig;
-  update: (patch: Partial<FacilityConfig>) => void;
+  idPrefix: string;
+  title: string;
+  description: string;
+  rules: PriceRule[];
+  openMin: number;
+  closeMin: number;
+  onChange: (rules: PriceRule[]) => void;
+  minBands?: number;
 }) {
+  const config = { priceRules: rules, openMin, closeMin };
+  const update = (patch: { priceRules: PriceRule[] }) => onChange(patch.priceRules);
   return (
     <>
-      <h3 className="mt-6 font-medium text-ink-900">Price bands</h3>
-      <p className="mt-1 text-sm text-ink-600">
-        A multi-hour booking costs the sum of its hours, so bands never need duplicating per duration.
-      </p>
+      <h3 className="mt-6 font-medium text-ink-900">{title}</h3>
+      <p className="mt-1 text-sm text-ink-600">{description}</p>
       {/* Three selects and a delete button in one row need desktop width; on a phone the
           band wraps to two rows and gets a border so the bands stay distinguishable. */}
       <ul className="mt-3 space-y-3 sm:space-y-2">
@@ -663,11 +697,11 @@ function HourlyPricing({
             className="grid grid-cols-2 items-end gap-2 rounded-lg border border-ink-200 p-3 sm:grid-cols-[1fr,1fr,1fr,auto] sm:border-0 sm:p-0"
           >
             <div>
-              <label className="field-label text-xs" htmlFor={`rule-from-${index}`}>
+              <label className="field-label text-xs" htmlFor={`${idPrefix}-from-${index}`}>
                 From
               </label>
               <select
-                id={`rule-from-${index}`}
+                id={`${idPrefix}-from-${index}`}
                 className="field-input"
                 value={rule.fromMin}
                 onChange={(e) => {
@@ -684,11 +718,11 @@ function HourlyPricing({
               </select>
             </div>
             <div>
-              <label className="field-label text-xs" htmlFor={`rule-to-${index}`}>
+              <label className="field-label text-xs" htmlFor={`${idPrefix}-to-${index}`}>
                 To
               </label>
               <select
-                id={`rule-to-${index}`}
+                id={`${idPrefix}-to-${index}`}
                 className="field-input"
                 value={rule.toMin}
                 onChange={(e) => {
@@ -705,11 +739,11 @@ function HourlyPricing({
               </select>
             </div>
             <div>
-              <label className="field-label text-xs" htmlFor={`rule-price-${index}`}>
+              <label className="field-label text-xs" htmlFor={`${idPrefix}-price-${index}`}>
                 Price per slot
               </label>
               <input
-                id={`rule-price-${index}`}
+                id={`${idPrefix}-price-${index}`}
                 type="number"
                 min={0}
                 className="field-input"
@@ -727,7 +761,7 @@ function HourlyPricing({
               className="h-11 w-11 justify-self-end sm:h-9 sm:w-auto"
               aria-label={`Remove price band ${index + 1}`}
               onClick={() => update({ priceRules: config.priceRules.filter((_, i) => i !== index) })}
-              disabled={config.priceRules.length === 1}
+              disabled={config.priceRules.length <= minBands}
             >
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
@@ -752,10 +786,122 @@ function HourlyPricing({
         Add band
       </Button>
 
-      <p className="mt-4 text-sm text-ink-600">
-        Example: a 2-hour evening booking would cost{" "}
-        <strong>{formatCurrency((config.priceRules.at(-1)?.price ?? 0) * 2)}</strong>.
-      </p>
+      {rules.length > 0 ? (
+        <p className="mt-4 text-sm text-ink-600">
+          Example: a 2-hour evening booking would cost{" "}
+          <strong>{formatCurrency((config.priceRules.at(-1)?.price ?? 0) * 2)}</strong>.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Weekday prices, and — for a ground that charges more when it is busy — a second
+ * table for the days that do.
+ *
+ * The weekend table is off until it is turned on, and turning it off again clears
+ * it rather than leaving prices nobody can see still in force.
+ */
+function HourlyPricing({
+  config,
+  update,
+}: {
+  config: FacilityConfig;
+  update: (patch: Partial<FacilityConfig>) => void;
+}) {
+  const weekend = config.weekendPriceRules ?? [];
+  const weekendDays = config.weekendDays ?? [5, 6, 0];
+  const weekendOn = weekend.length > 0;
+
+  return (
+    <>
+      <PriceBands
+        idPrefix="rule"
+        title={weekendOn ? "Weekday prices" : "Price bands"}
+        description={
+          weekendOn
+            ? "Charged on every day not ticked as a weekend below."
+            : "A multi-hour booking costs the sum of its hours, so bands never need duplicating per duration."
+        }
+        rules={config.priceRules}
+        openMin={config.openMin}
+        closeMin={config.closeMin}
+        onChange={(priceRules) => update({ priceRules })}
+      />
+
+      <div className="mt-6 rounded-lg border border-ink-200 p-4">
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4"
+            checked={weekendOn}
+            onChange={(e) =>
+              update(
+                e.target.checked
+                  ? {
+                      // Starts as a copy of the weekday table, so the owner edits
+                      // prices rather than rebuilding the hours from scratch.
+                      weekendPriceRules: config.priceRules.map((r) => ({ ...r })),
+                      weekendDays: weekendDays.length > 0 ? weekendDays : [5, 6, 0],
+                    }
+                  : { weekendPriceRules: [] },
+              )
+            }
+          />
+          <span>
+            <span className="font-medium text-ink-900">Charge different prices at the weekend</span>
+            <span className="mt-0.5 block text-sm text-ink-600">
+              Off means one price all week. Existing bookings keep what they were charged either way.
+            </span>
+          </span>
+        </label>
+
+        {weekendOn ? (
+          <>
+            <p className="field-label mt-4">Weekend days</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {WEEK.map(({ day, label }) => {
+                const on = weekendDays.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      update({
+                        weekendDays: on ? weekendDays.filter((d: number) => d !== day) : [...weekendDays, day],
+                      })
+                    }
+                    className={cn(
+                      "h-11 w-14 rounded-lg border text-sm font-semibold transition-colors sm:h-9",
+                      on
+                        ? "border-pitch-600 bg-pitch-600 text-white"
+                        : "border-ink-200 bg-white text-ink-700 hover:border-pitch-500",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {weekendDays.length === 0 ? (
+              <p className="mt-2 text-sm text-amber-700">Pick at least one day, or turn weekend pricing off.</p>
+            ) : null}
+
+            <PriceBands
+              idPrefix="weekend-rule"
+              title="Weekend prices"
+              description="Charged on the days ticked above. Cover the same hours as the weekday bands."
+              rules={weekend}
+              openMin={config.openMin}
+              closeMin={config.closeMin}
+              minBands={0}
+              onChange={(weekendPriceRules) => update({ weekendPriceRules })}
+            />
+          </>
+        ) : null}
+      </div>
     </>
   );
 }

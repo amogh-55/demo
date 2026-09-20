@@ -355,6 +355,65 @@ describe("bookings taken over the telephone", () => {
   });
 });
 
+describe("weekend price bands", () => {
+  const base = {
+    slotMinutes: 60,
+    openMin: 6 * 60,
+    closeMin: 22 * 60,
+    priceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: 700 }],
+    bookingWindowDays: 30,
+    holdMinutes: 5,
+  };
+
+  it("defaults to one price all week", () => {
+    const parsed = facilityConfigSchema.parse(base);
+    assert.deepEqual(parsed.weekendPriceRules, []);
+    assert.deepEqual(parsed.weekendDays, [5, 6, 0], "Friday to Sunday, as the grounds around here charge");
+  });
+
+  it("accepts a weekend table covering the same hours", () => {
+    const parsed = facilityConfigSchema.parse({
+      ...base,
+      weekendPriceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: 1000 }],
+      weekendDays: [6, 0],
+    });
+    assert.equal(parsed.weekendPriceRules[0]!.price, 1000);
+    assert.deepEqual(parsed.weekendDays, [6, 0]);
+  });
+
+  /** A gap here would make part of a Saturday silently unbookable. */
+  it("refuses a weekend table that leaves hours unpriced", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      weekendPriceRules: [{ fromMin: 6 * 60, toMin: 12 * 60, price: 1000 }],
+    });
+    assert.equal(result.success, false);
+  });
+
+  it("refuses weekend prices with no days to apply to", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      weekendPriceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: 1000 }],
+      weekendDays: [],
+    });
+    assert.equal(result.success, false);
+  });
+
+  it("refuses a day listed twice, or a day that is not a day", () => {
+    assert.equal(facilityConfigSchema.safeParse({ ...base, weekendDays: [6, 6] }).success, false);
+    assert.equal(facilityConfigSchema.safeParse({ ...base, weekendDays: [7] }).success, false);
+    assert.equal(facilityConfigSchema.safeParse({ ...base, weekendDays: [-1] }).success, false);
+  });
+
+  it("refuses a negative weekend price", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      weekendPriceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: -100 }],
+    });
+    assert.equal(result.success, false);
+  });
+});
+
 describe("request bodies", () => {
   const post = (body: string, headers: Record<string, string> = {}) =>
     new Request("http://localhost/api/holds", {
@@ -365,6 +424,17 @@ describe("request bodies", () => {
 
   it("reads an ordinary body", async () => {
     assert.deepEqual(await readJson(post(JSON.stringify({ hello: "world" }))), { hello: "world" });
+  });
+
+  /**
+   * All of these parse. The danger is what happens next: a route that reads a
+   * field off the result crashes with a 500, which reads as our bug rather than
+   * as a refusal.
+   */
+  it("refuses valid JSON that is not an object", async () => {
+    for (const body of ["null", "[]", '"hello"', "42", "true"]) {
+      await assert.rejects(readJson(post(body)), /Malformed request/, `should refuse ${body}`);
+    }
   });
 
   it("refuses malformed JSON without leaking the parser error", async () => {

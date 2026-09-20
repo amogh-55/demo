@@ -52,6 +52,17 @@ export function istInstant(date: string, minuteOfDay: number): Date {
 }
 
 /** Whole days from IST-today to `date` (negative = past). */
+/**
+ * Day of the week for a business date: 0 Sunday … 6 Saturday.
+ *
+ * Read off the date string rather than a Date in the server's zone, because the
+ * business date is already the IST day — a booking on Saturday the 3rd is a
+ * Saturday booking whether the server thinks it is Friday evening or not.
+ */
+export function istWeekday(date: string): number {
+  return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
 export function daysFromToday(date: string, now: Date = new Date()): number {
   const startOfDate = istInstant(date, 0).getTime();
   const startOfToday = istInstant(istDateString(now), 0).getTime();

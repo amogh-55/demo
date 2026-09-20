@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { fail, ok } from "@/lib/api";
-import { purgeExpiredScreenshots } from "@/lib/booking/service";
+import { purgeExpiredScreenshots, purgeOrphanScreenshots } from "@/lib/booking/service";
 import { appError } from "@/lib/errors";
 import { log } from "@/lib/log";
 
@@ -30,8 +30,12 @@ export async function GET(request: Request) {
       throw appError("NOT_FOUND");
     }
 
+    // Two different leaks: images of games long played, and images that were
+    // uploaded but never became a booking at all. Only the first is visible from
+    // the database, so both sweeps have to run.
     const result = await purgeExpiredScreenshots();
-    return ok(result);
+    const orphans = await purgeOrphanScreenshots();
+    return ok({ ...result, orphans });
   } catch (err) {
     return fail(err, { route: "GET /api/cron/purge-screenshots" });
   }

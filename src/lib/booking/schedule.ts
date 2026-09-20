@@ -1,3 +1,4 @@
+import { istWeekday } from "@/lib/time";
 import type { BallType, FacilityConfig, PriceRule } from "@/lib/types";
 
 export interface SlotUnitTemplate {
@@ -13,18 +14,47 @@ export function priceForStart(rules: PriceRule[], startMin: number): number | nu
 }
 
 /**
+ * Whether a date is charged at weekend rates.
+ *
+ * Both halves matter: a ground with no weekend table charges one price all week,
+ * and a ground with one charges it only on the days it named.
+ */
+export function isWeekendRate(
+  config: Pick<FacilityConfig, "weekendPriceRules" | "weekendDays">,
+  date: string,
+): boolean {
+  if (!config.weekendPriceRules || config.weekendPriceRules.length === 0) return false;
+  return (config.weekendDays ?? []).includes(istWeekday(date));
+}
+
+/** The price table in force on a given date. */
+export function rulesForDate(
+  config: Pick<FacilityConfig, "priceRules" | "weekendPriceRules" | "weekendDays">,
+  date?: string,
+): PriceRule[] {
+  return date && isWeekendRate(config, date) ? (config.weekendPriceRules ?? []) : config.priceRules;
+}
+
+/**
  * The atomic bookable units for a facility's operating day.
  * Half-open intervals: [start, end). 5–7 and 7–9 are adjacent, never overlapping.
+ *
+ * The date is what decides which price table is used, so it is passed wherever a
+ * real booking is being priced. Left out, the weekday table is used — which is
+ * right for the "from ₹700" on the home page and wrong for anything that takes
+ * money, so every path that does takes the date.
  */
 export function buildDayTemplate(
-  config: Pick<FacilityConfig, "openMin" | "closeMin" | "slotMinutes" | "priceRules">,
+  config: Pick<FacilityConfig, "openMin" | "closeMin" | "slotMinutes" | "priceRules" | "weekendPriceRules" | "weekendDays">,
+  date?: string,
 ): SlotUnitTemplate[] {
   const units: SlotUnitTemplate[] = [];
   // A zero or negative slot length would loop forever. The admin API rejects one,
   // so this only guards against a configuration edited straight into the database.
   if (!Number.isFinite(config.slotMinutes) || config.slotMinutes <= 0) return units;
+  const rules = rulesForDate(config, date);
   for (let start = config.openMin; start + config.slotMinutes <= config.closeMin; start += config.slotMinutes) {
-    const price = priceForStart(config.priceRules, start);
+    const price = priceForStart(rules, start);
     if (price === null) continue; // Unpriced time is not sellable.
     units.push({ startMin: start, endMin: start + config.slotMinutes, price });
   }

@@ -27,6 +27,9 @@ const HOURLY_BASE = {
   closeMin: 23 * HOUR, // 11:00 PM
   bookingWindowDays: 30,
   holdMinutes: 5,
+  // Empty means one price every day, which is where every ground starts.
+  weekendPriceRules: [] as Array<{ fromMin: number; toMin: number; price: number }>,
+  weekendDays: [5, 6, 0],
   oversPerSlot: 0,
   payAtVenueMaxOvers: 0,
   ballTypes: [] as Array<{ id: string; name: string; pricePerSlot: number }>,
@@ -51,6 +54,9 @@ const BOWLING_BASE = {
   bookingWindowDays: 30,
   holdMinutes: 5,
   priceRules: [{ fromMin: 6 * HOUR, toMin: 23 * HOUR, price: 0 }],
+  // A bowling session is priced by its ball, so it has no weekday/weekend table.
+  weekendPriceRules: [] as Array<{ fromMin: number; toMin: number; price: number }>,
+  weekendDays: [5, 6, 0],
   oversPerSlot: 10,
   payAtVenueMaxOvers: 40,
   ballTypes: [
@@ -222,6 +228,17 @@ function upgradeConfig(config: Record<string, any>, kind: "HOURLY" | "OVERS"): R
     next.oversPerSlot = 0;
     next.payAtVenueMaxOvers = 0;
     next.ballTypes = [];
+    changed = true;
+  }
+
+  if (next.weekendPriceRules === undefined) {
+    // No weekend table at all is exactly what "one price all week" looks like, so
+    // nothing an existing ground charges changes by filling this in.
+    next.weekendPriceRules = [];
+    changed = true;
+  }
+  if (next.weekendDays === undefined) {
+    next.weekendDays = [5, 6, 0];
     changed = true;
   }
 

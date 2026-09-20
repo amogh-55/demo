@@ -2,7 +2,13 @@ import "server-only";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { appError } from "./errors";
 import { SCREENSHOT_KEY_PATTERN } from "./validation";
@@ -157,6 +163,66 @@ export async function deletePaymentScreenshot(key: string): Promise<void> {
   }
 
   await client().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
+}
+
+export interface StoredScreenshot {
+  key: string;
+  size: number;
+  uploadedAt: Date;
+}
+
+/**
+ * Every screenshot the store currently holds.
+ *
+ * Needed because the database is not the whole truth about the bucket: a customer
+ * who uploads a screenshot and then closes the tab leaves a file behind that no
+ * booking will ever name, and nothing walking the bookings can find it. Used by
+ * the retention job to sweep those up.
+ */
+export async function listStoredScreenshots(): Promise<StoredScreenshot[]> {
+  const prefix = "payment-screenshots/";
+
+  if (storageDriver() === "local") {
+    const root = path.join(LOCAL_ROOT, prefix);
+    const found: StoredScreenshot[] = [];
+    let days: string[];
+    try {
+      days = await fs.readdir(root);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw err;
+    }
+    for (const day of days) {
+      let files: string[];
+      try {
+        files = await fs.readdir(path.join(root, day));
+      } catch {
+        continue; // not a directory, or vanished under us
+      }
+      for (const name of files) {
+        const key = `${prefix}${day}/${name}`;
+        if (!KEY_PATTERN.test(key)) continue;
+        const stat = await fs.stat(path.join(root, day, name));
+        found.push({ key, size: stat.size, uploadedAt: stat.mtime });
+      }
+    }
+    return found;
+  }
+
+  const s3 = client();
+  const found: StoredScreenshot[] = [];
+  let token: string | undefined;
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token }),
+    );
+    for (const object of page.Contents ?? []) {
+      if (!object.Key || !KEY_PATTERN.test(object.Key)) continue;
+      found.push({ key: object.Key, size: object.Size ?? 0, uploadedAt: object.LastModified ?? new Date(0) });
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+  return found;
 }
 
 export type ScreenshotAccess =

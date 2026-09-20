@@ -35,6 +35,10 @@ export interface PublicFacility {
    * OVERS facility, which is priced by ball rather than by time of day.
    */
   priceBands: Array<{ fromMin: number; toMin: number; price: number }>;
+  /** The second table, for grounds that charge more at the weekend. Empty otherwise. */
+  weekendBands: Array<{ fromMin: number; toMin: number; price: number }>;
+  /** Which days those apply to: 0 Sunday … 6 Saturday. */
+  weekendDays: number[];
   /** OVERS facilities: what one block of overs costs, per ball. */
   ballTypes: Array<{ id: string; name: string; pricePerSlot: number }>;
   slotMinutes: number;
@@ -93,6 +97,10 @@ export async function getPublicCatalog(): Promise<PublicLocationTree[]> {
       fromPricePerBlock: f.kind === "OVERS" && ballPrices.length > 0 ? Math.min(...ballPrices) : null,
       oversPerSlot: f.kind === "OVERS" ? f.config.oversPerSlot : 0,
       priceBands: f.kind === "OVERS" ? [] : f.config.priceRules.map((r) => ({ ...r })),
+      // Empty unless the owner charges differently at the weekend, which is what
+      // lets the pricing card show one table or two without being told which.
+      weekendBands: f.kind === "OVERS" ? [] : (f.config.weekendPriceRules ?? []).map((r) => ({ ...r })),
+      weekendDays: f.kind === "OVERS" ? [] : (f.config.weekendDays ?? []),
       ballTypes: f.kind === "OVERS" ? f.config.ballTypes.map((b) => ({ ...b })) : [],
       slotMinutes: f.config.slotMinutes,
       openMin: f.config.openMin,

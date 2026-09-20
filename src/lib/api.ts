@@ -69,9 +69,22 @@ export async function readJson(request: Request): Promise<unknown> {
   // known once it has been read.
   if (text.length > MAX_JSON_BYTES) throw appError("VALIDATION", "That request was too large.");
 
+  let parsed: unknown;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
     throw appError("VALIDATION", "Malformed request.");
   }
+
+  /**
+   * Every endpoint here is posted an object. A bare `null`, array, string or
+   * number is valid JSON and parses happily, and then the route reads a field off
+   * it and dies with a 500 — a crash reported as our fault for input that was
+   * never going to be accepted. Refused once, here, rather than guarded in every
+   * route that reads a property before validating.
+   */
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw appError("VALIDATION", "Malformed request.");
+  }
+  return parsed;
 }

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   applyBallPricing,
   buildDayTemplate,
+  isWeekendRate,
   hoursTouched,
   minutesForOvers,
   oversLadder,
@@ -12,6 +13,7 @@ import {
   slotsForOvers,
   totalPrice,
 } from "../src/lib/booking/schedule";
+import { istWeekday } from "../src/lib/time";
 import { generateBookingReference, generateHoldToken, hashHoldToken } from "../src/lib/booking/reference";
 
 const CONFIG = {
@@ -234,5 +236,90 @@ describe("hours a session touches", () => {
   it("returns nothing for an empty or backwards range", () => {
     assert.deepEqual(hoursTouched(600, 600), []);
     assert.deepEqual(hoursTouched(660, 600), []);
+  });
+});
+
+describe("weekend pricing", () => {
+  const base = {
+    openMin: 6 * 60,
+    closeMin: 10 * 60,
+    slotMinutes: 60,
+    priceRules: [{ fromMin: 6 * 60, toMin: 10 * 60, price: 700 }],
+    weekendPriceRules: [{ fromMin: 6 * 60, toMin: 10 * 60, price: 1000 }],
+    weekendDays: [5, 6, 0],
+  };
+
+  // 2026-09-19 is a Saturday, 2026-09-22 a Tuesday, 2026-09-18 a Friday.
+  const SATURDAY = "2026-09-19";
+  const TUESDAY = "2026-09-22";
+  const FRIDAY = "2026-09-18";
+  const SUNDAY = "2026-09-20";
+
+  it("charges the weekday price on a weekday", () => {
+    const day = buildDayTemplate(base, TUESDAY);
+    assert.ok(day.every((u) => u.price === 700));
+  });
+
+  it("charges the weekend price on the days the owner named", () => {
+    for (const date of [FRIDAY, SATURDAY, SUNDAY]) {
+      const day = buildDayTemplate(base, date);
+      assert.ok(day.every((u) => u.price === 1000), `${date} should be a weekend`);
+    }
+  });
+
+  it("charges one price all week when no weekend table is set", () => {
+    const flat = { ...base, weekendPriceRules: [] };
+    assert.ok(buildDayTemplate(flat, SATURDAY).every((u) => u.price === 700));
+    assert.ok(buildDayTemplate(flat, TUESDAY).every((u) => u.price === 700));
+  });
+
+  it("falls back to weekday prices when no date is given", () => {
+    assert.ok(buildDayTemplate(base).every((u) => u.price === 700));
+  });
+
+  it("honours an unusual week — a ground busy on Wednesdays", () => {
+    const midweek = { ...base, weekendDays: [3] };
+    assert.ok(buildDayTemplate(midweek, "2026-09-23").every((u) => u.price === 1000), "Wednesday");
+    assert.ok(buildDayTemplate(midweek, SATURDAY).every((u) => u.price === 700), "Saturday is normal here");
+  });
+
+  /** An old facility document has neither field at all, and must keep working. */
+  it("prices a configuration saved before weekends existed", () => {
+    const legacy = { openMin: 6 * 60, closeMin: 10 * 60, slotMinutes: 60, priceRules: base.priceRules };
+    assert.ok(buildDayTemplate(legacy as never, SATURDAY).every((u) => u.price === 700));
+    assert.equal(isWeekendRate(legacy as never, SATURDAY), false);
+  });
+
+  it("knows which dates are charged at weekend rates", () => {
+    assert.equal(isWeekendRate(base, SATURDAY), true);
+    assert.equal(isWeekendRate(base, TUESDAY), false);
+    assert.equal(isWeekendRate({ ...base, weekendPriceRules: [] }, SATURDAY), false);
+  });
+
+  it("reads the weekday off the business date, not the server's clock", () => {
+    // Late on a Friday night in IST it is still Friday, whatever UTC says.
+    assert.equal(istWeekday("2026-09-18"), 5);
+    assert.equal(istWeekday("2026-09-19"), 6);
+    assert.equal(istWeekday("2026-09-20"), 0);
+  });
+
+  it("can price different hours differently on each table", () => {
+    const split = {
+      ...base,
+      closeMin: 22 * 60,
+      priceRules: [
+        { fromMin: 6 * 60, toMin: 17 * 60, price: 700 },
+        { fromMin: 17 * 60, toMin: 22 * 60, price: 900 },
+      ],
+      weekendPriceRules: [
+        { fromMin: 6 * 60, toMin: 17 * 60, price: 800 },
+        { fromMin: 17 * 60, toMin: 22 * 60, price: 1200 },
+      ],
+    };
+    const saturday = buildDayTemplate(split, SATURDAY);
+    assert.equal(saturday.find((u) => u.startMin === 10 * 60)!.price, 800);
+    assert.equal(saturday.find((u) => u.startMin === 19 * 60)!.price, 1200);
+    const tuesday = buildDayTemplate(split, TUESDAY);
+    assert.equal(tuesday.find((u) => u.startMin === 19 * 60)!.price, 900);
   });
 });
