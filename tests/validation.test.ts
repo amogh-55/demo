@@ -230,6 +230,23 @@ describe("settings and login", () => {
     }).success, false);
   });
 
+  /** It ends up in an <img src> on the payment screen, so it is a link or nothing. */
+  it("refuses a UPI QR image that is not an http link", () => {
+    const base = {
+      businessName: "Turf",
+      supportPhone: "9876543210",
+      whatsappNumber: "9876543210",
+      upiId: "turf@okicici",
+      upiPayeeName: "Turf Arena",
+    };
+    for (const upiQrImageUrl of ["javascript:alert(1)", "data:text/html,<script>", "not a url"]) {
+      assert.equal(settingsSchema.safeParse({ ...base, upiQrImageUrl }).success, false, upiQrImageUrl);
+    }
+    for (const upiQrImageUrl of ["https://cdn.example.com/qr.png", ""]) {
+      assert.equal(settingsSchema.safeParse({ ...base, upiQrImageUrl }).success, true, `"${upiQrImageUrl}"`);
+    }
+  });
+
   it("requires a password long enough to be worth hashing", () => {
     assert.equal(adminLoginSchema.safeParse({ username: "owner", password: "short" }).success, false);
     assert.equal(adminLoginSchema.safeParse({ username: "owner", password: "a-long-enough-password" }).success, true);

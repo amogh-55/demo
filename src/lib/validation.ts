@@ -300,7 +300,12 @@ export const settingsSchema = z.object({
     .trim()
     .regex(/^[\w.\-]{2,60}@[a-zA-Z]{2,30}$/, "Enter a valid UPI ID, e.g. name@bank"),
   upiPayeeName: z.string().trim().min(2).max(80),
-  upiQrImageUrl: z.string().trim().max(500).default(""),
+  /**
+   * Checked like the maps link rather than taken as free text: this value is put
+   * straight into an <img src> on the payment screen, so a "javascript:" or
+   * "data:" URL saved here would be served to every customer paying.
+   */
+  upiQrImageUrl: httpUrlSchema.default(""),
   otpEnabled: z.boolean().default(false),
   /** Blank is allowed and means "use the support number". */
   notifyPhone: z.union([z.literal(""), phoneSchema]).default(""),
