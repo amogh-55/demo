@@ -172,6 +172,10 @@ export function BookingFlow({
   const [preview, setPreview] = React.useState<string | null>(null);
   const [screenshotKey, setScreenshotKey] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
+  /** The 12-digit UPI reference. This, not the image, is what a booking needs. */
+  const [utr, setUtr] = React.useState("");
+  const utrDigits = utr.replace(/\D/g, "");
+  const utrValid = utrDigits.length === 12;
 
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -482,6 +486,7 @@ export function BookingFlow({
     setScreenshotKey(null);
     setFile(null);
     setPreview(null);
+    setUtr("");
     setStep("slots");
     void loadAvailability();
   }
@@ -552,9 +557,11 @@ export function BookingFlow({
       form.append("file", chosen);
       const result = await api<{ key: string }>("/api/uploads", { method: "POST", body: form });
       setScreenshotKey(result.key);
-    } catch (err) {
+    } catch {
+      // Not surfaced as an error: the booking goes through on the UTR, and a red
+      // banner here would send a customer who has already paid away from the
+      // screen. The upload panel says what happened, calmly.
       setScreenshotKey(null);
-      setError(errorMessage(err));
     } finally {
       setUploading(false);
     }
@@ -568,9 +575,9 @@ export function BookingFlow({
   }
 
   async function submitBooking() {
-    // A pay-at-the-ground session has no screenshot to wait for; every other
-    // booking still does. The server decides which it is regardless of this.
-    if (submitting || (!screenshotKey && !hold?.payAtVenue)) return;
+    // A pay-at-the-ground session has nothing to pay for here; every other booking
+    // needs its UPI reference. The server decides which it is regardless of this.
+    if (submitting || (!utrValid && !hold?.payAtVenue)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -580,6 +587,7 @@ export function BookingFlow({
           customerName: name,
           customerPhone: phone,
           paymentScreenshotKey: screenshotKey,
+          utr: hold?.payAtVenue ? null : utrDigits,
         }),
       });
       router.push("/booking/success");
@@ -1329,7 +1337,7 @@ export function BookingFlow({
                   Pay {formatCurrency(hold.amount)} by UPI
                 </h2>
                 <p className="mt-1 text-sm text-ink-400">
-                  Pay using any UPI app, then upload the payment screenshot below.
+                  Pay using any UPI app, then enter the UTR number from your payment below.
                 </p>
 
                 <div className="mt-4 grid gap-5 sm:grid-cols-[auto,1fr] sm:items-start">
@@ -1388,9 +1396,41 @@ export function BookingFlow({
                 </div>
               </section>
 
+              {/* The UTR comes first and the screenshot second, because that is the
+                  order of what matters: the reference is what the payment is traced
+                  by in the bank statement, and the image is corroboration. */}
+              <section className="card" aria-labelledby="utr-heading">
+                <h2 id="utr-heading" className="text-lg font-semibold text-white">
+                  Enter your UTR number
+                </h2>
+                <p className="mt-1 text-sm text-ink-400">
+                  The 12-digit reference in your payment app, shown as UTR, UPI reference or transaction ID.
+                </p>
+
+                <label className="mt-4 block">
+                  <span className="text-sm font-medium text-ink-200">UTR number</span>
+                  <input
+                    className="field-input mt-1.5 font-mono tracking-wider"
+                    value={utr}
+                    onChange={(e) => setUtr(e.target.value.replace(/[^\d\s-]/g, "").slice(0, 20))}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="123456789012"
+                    aria-describedby="utr-help"
+                  />
+                </label>
+                <p id="utr-help" className="mt-1.5 text-xs text-ink-400">
+                  {utr.length === 0
+                    ? "Open your payment in PhonePe, GPay or Paytm and copy the UTR."
+                    : utrValid
+                      ? "Looks right."
+                      : `${utrDigits.length} of 12 digits — please check the number.`}
+                </p>
+              </section>
+
               <section className="card" aria-labelledby="upload-heading">
                 <h2 id="upload-heading" className="text-lg font-semibold text-white">
-                  Upload payment screenshot
+                  Add your payment screenshot
                 </h2>
                 <p className="mt-1 text-sm text-ink-400">JPG, PNG or WebP · up to 5MB</p>
 
@@ -1420,7 +1460,13 @@ export function BookingFlow({
                             <Check className="h-4 w-4" aria-hidden="true" /> Uploaded
                           </span>
                         ) : (
-                          <span className="text-red-300">Upload failed. Choose the file again.</span>
+                          // A failed upload no longer costs anybody their slot, so it is
+                          // said plainly and without alarm — the money is traced by the
+                          // UTR either way.
+                          <span className="text-ink-300">
+                            The image did not go through — no problem, we will match your payment by the UTR
+                            above. Please double-check that number is typed correctly.
+                          </span>
                         )}
                       </p>
                       <Button variant="ghost" className="mt-2 -ml-4" onClick={clearFile} disabled={uploading}>
@@ -1443,6 +1489,7 @@ export function BookingFlow({
                   <Row label="Booking" value={hold.facilityName} />
                   <Row label="Date" value={formatBusinessDate(hold.date)} />
                   <Row label="Time" value={formatRange(hold.startMin, hold.endMin)} />
+                  <Row label="UTR" value={utrValid ? utrDigits : "Not entered yet"} />
                   <Row label="Amount paid" value={formatCurrency(hold.amount)} strong />
                 </dl>
 
@@ -1459,12 +1506,17 @@ export function BookingFlow({
                 <Button
                   className="mt-4 w-full"
                   size="lg"
-                  disabled={!screenshotKey || uploading || submitting || holdExpired}
+                  disabled={!utrValid || uploading || submitting || holdExpired}
                   onClick={submitBooking}
                 >
                   {submitting ? <Spinner /> : null}
                   {submitting ? "Submitting…" : "Book now"}
                 </Button>
+                {!utrValid ? (
+                  <p className="mt-2 text-center text-xs text-ink-400">
+                    Enter your 12-digit UTR number above to finish.
+                  </p>
+                ) : null}
               </section>
             </>
           ) : null}

@@ -37,6 +37,8 @@ function serialise(b: BookingDoc) {
     phoneVerified: Boolean(b.phoneVerified),
     /** Confirmed without paying online: the money is due at the gate. */
     payAtVenue: Boolean(b.payAtVenue),
+    /** The staff member who took this booking over the phone, or null. */
+    createdBy: b.createdBy ?? null,
     date: b.date,
     startMin: b.startMin,
     endMin: b.endMin,
@@ -56,6 +58,8 @@ function serialise(b: BookingDoc) {
       status: p.status,
       reviewedBy: p.reviewedBy,
       note: p.note,
+      /** What the owner actually checks against the bank statement. */
+      utr: p.utr ?? null,
       // The key itself is never exposed; the admin only needs to know a screenshot exists.
       hasScreenshot: Boolean(p.screenshotKey),
     })),
@@ -130,6 +134,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           bookingId: id,
           amount: action.amount,
           note: action.note,
+          utr: action.utr ?? null,
           admin,
         });
         await recordAudit(admin, "PAYMENT_RECORDED_BY_STAFF", "booking", booking.reference, {

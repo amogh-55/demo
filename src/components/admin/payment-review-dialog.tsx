@@ -13,6 +13,8 @@ export interface PaymentAttemptView {
   amount: number | null;
   status: "PENDING" | "ACCEPTED" | "REJECTED";
   note: string | null;
+  /** The 12-digit UPI reference the customer typed. Null on cash the admin recorded. */
+  utr?: string | null;
   /** False for a payment the admin recorded by hand — there is no image to open. */
   hasScreenshot?: boolean;
   /** The image was deleted by the retention job; the payment record itself remains. */
@@ -55,7 +57,7 @@ export function PaymentReviewDialog({
   error: string | null;
   onAccept: (attemptId: string, amount: number, note: string | undefined, confirmBooking: boolean) => void;
   onReject: (attemptId: string, note: string) => void;
-  onRecord: (amount: number, note: string, confirmBooking: boolean) => void;
+  onRecord: (amount: number, note: string, confirmBooking: boolean, utr: string | null) => void;
 }) {
   const pending = booking?.payments.find((p) => p.status === "PENDING") ?? null;
   const [amount, setAmount] = React.useState("");
@@ -63,12 +65,16 @@ export function PaymentReviewDialog({
   const [mode, setMode] = React.useState<"ACCEPT" | "REJECT">("ACCEPT");
   /** Recording money with no screenshot behind it — paid on WhatsApp, or in cash. */
   const [manual, setManual] = React.useState(false);
+  /** Optional: the statement line this payment came from, when it was a transfer. */
+  const [manualUtr, setManualUtr] = React.useState("");
+  const manualUtrDigits = manualUtr.replace(/\D/g, "");
 
   React.useEffect(() => {
     if (!open || !booking) return;
     // Pre-fill with what is still owed: the common case is a payment in full.
     setAmount(String(booking.amountRemaining || booking.amount));
     setNote("");
+    setManualUtr("");
     setMode("ACCEPT");
     // With nothing left to review, recording a payment is the only useful action,
     // so open straight into it rather than showing a dead end.
@@ -130,7 +136,11 @@ export function PaymentReviewDialog({
                     <span className="inline-flex h-11 min-w-0 items-center truncate text-ink-500">
                       #{i + 1} · {formatIstTimestamp(p.uploadedAt)}
                       <span className="ml-1.5 shrink-0 text-ink-400">
-                        {p.screenshotExpired ? "· image deleted after 7 days" : "· recorded by staff"}
+                        {p.screenshotExpired
+                          ? "· image deleted after 7 days"
+                          : p.utr
+                            ? `· UTR ${p.utr}`
+                            : "· recorded by staff"}
                       </span>
                     </span>
                   ) : (
@@ -178,6 +188,22 @@ export function PaymentReviewDialog({
                 onChange={(e) => setAmount(e.target.value)}
               />
 
+              <label className="field-label mt-3" htmlFor="manual-utr">
+                UTR, if it was a UPI transfer (optional)
+              </label>
+              <input
+                id="manual-utr"
+                className="field-input font-mono tracking-wide"
+                value={manualUtr}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="12 digits from the statement"
+                onChange={(e) => setManualUtr(e.target.value.replace(/[^\d\s-]/g, "").slice(0, 20))}
+              />
+              {manualUtr && manualUtrDigits.length !== 12 ? (
+                <p className="mt-1 text-xs text-amber-700">A UTR is 12 digits — leave it blank if this was cash.</p>
+              ) : null}
+
               <div className="mt-3">
                 <ReasonPicker
                   key={`manual-${booking.id}-${String(open)}`}
@@ -214,6 +240,16 @@ export function PaymentReviewDialog({
             </div>
           ) : (
             <>
+              {pending.utr ? (
+                <p className="mt-4 rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 text-sm">
+                  <span className="text-ink-500">UTR</span>{" "}
+                  <span className="select-all font-mono font-semibold tracking-wide text-ink-900">{pending.utr}</span>
+                  <span className="mt-0.5 block text-xs text-ink-500">
+                    Check this against your bank statement — it is the payment, whether or not a screenshot came with it.
+                  </span>
+                </p>
+              ) : null}
+
               {/* Pinned to the attempt being reviewed, not to the newest upload. */}
               <a
                 href={`/api/admin/bookings/${booking.id}/screenshot?attempt=${encodeURIComponent(pending.id)}`}
@@ -318,8 +354,10 @@ export function PaymentReviewDialog({
             {manual || !pending ? (
               <Button
                 className="h-11"
-                disabled={busy || !amountValid || note.trim().length < 3}
-                onClick={() => onRecord(parsed, note.trim(), settlesInFull)}
+                disabled={
+                  busy || !amountValid || note.trim().length < 3 || (manualUtr !== "" && manualUtrDigits.length !== 12)
+                }
+                onClick={() => onRecord(parsed, note.trim(), settlesInFull, manualUtrDigits.length === 12 ? manualUtrDigits : null)}
               >
                 {busy ? <Spinner /> : null}
                 {busy ? "Saving…" : settlesInFull ? "Record & accept booking" : `Record ${amountValid ? formatCurrency(parsed) : "payment"}`}

@@ -15,9 +15,10 @@ export const dynamic = "force-dynamic";
 /**
  * Turn a live hold into a PENDING booking.
  *
- * The client supplies only a name, a phone number and the storage key of its
- * screenshot. Location, date, time and amount all come from the server-side hold,
- * so a tampered request cannot change what is being booked or what it costs.
+ * The client supplies only a name, a phone number, the UPI reference it paid with
+ * and the storage key of its screenshot, if that uploaded. Location, date, time
+ * and amount all come from the server-side hold, so a tampered request cannot
+ * change what is being booked or what it costs.
  */
 export async function POST(request: Request) {
   try {
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
       customerName: input.customerName,
       customerPhone: input.customerPhone,
       paymentScreenshotKey: input.paymentScreenshotKey,
+      utr: input.utr,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,
     });

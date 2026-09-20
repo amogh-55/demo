@@ -198,10 +198,12 @@ export function LocationsManager({ initialLocations }: { initialLocations: Admin
         </section>
       ) : null}
 
-      {selected ? <LocationEditor key={selected.id} location={selected} onSaved={refreshLocations} /> : null}
+      {/* Both are keyed on the ground so switching grounds remounts them with fresh
+          state — but they are siblings, so the keys have to differ from each other. */}
+      {selected ? <LocationEditor key={`editor-${selected.id}`} location={selected} onSaved={refreshLocations} /> : null}
       {selected ? (
         <FacilitiesManager
-          key={selected.id}
+          key={`facilities-${selected.id}`}
           location={selected}
           facilities={tree.facilities.filter((f) => f.locationId === selected.id)}
           resources={tree.resources}

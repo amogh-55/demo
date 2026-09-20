@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  adminBookingCreateSchema,
   adminLoginSchema,
+  addPaymentSchema,
   bookingSubmitSchema,
   customerNameSchema,
   phoneSchema,
   settingsSchema,
   facilityConfigSchema,
   locationCreateSchema,
+  utrSchema,
 } from "../src/lib/validation";
 import { normaliseWhatsappNumber, confirmationMessage, rejectionMessage, whatsappUrl } from "../src/lib/whatsapp";
 import { readJson } from "../src/lib/api";
@@ -290,6 +293,65 @@ describe("WhatsApp links", () => {
     const message = rejectionMessage({ ...booking, reason: "Payment not received" });
     assert.ok(message.includes("could not be confirmed"));
     assert.ok(message.includes("Payment not received"));
+  });
+});
+
+describe("UPI reference numbers", () => {
+  it("accepts the 12 digits people copy out of a payment app", () => {
+    for (const input of ["123456789012", " 123456789012 ", "1234 5678 9012", "1234-5678-9012"]) {
+      assert.equal(utrSchema.parse(input), "123456789012", `failed for ${input}`);
+    }
+  });
+
+  it("rejects anything that is not 12 digits", () => {
+    for (const input of ["", "12345678901", "1234567890123", "12345678901a", "abcdefghijkl"]) {
+      assert.equal(utrSchema.safeParse(input).success, false, `should reject ${input}`);
+    }
+  });
+
+  it("lets a booking through without a screenshot, but keeps the reference", () => {
+    const parsed = bookingSubmitSchema.parse({
+      holdToken: "t".repeat(40),
+      customerName: "Ravi Kumar",
+      customerPhone: "9876543210",
+      utr: "123456789012",
+    });
+    assert.equal(parsed.paymentScreenshotKey, null);
+    assert.equal(parsed.utr, "123456789012");
+  });
+
+  it("refuses a balance payment with no reference behind it", () => {
+    assert.equal(addPaymentSchema.safeParse({ paymentScreenshotKey: null }).success, false);
+    assert.equal(addPaymentSchema.parse({ utr: "123456789012" }).utr, "123456789012");
+  });
+});
+
+describe("bookings taken over the telephone", () => {
+  const base = {
+    resourceId: "000000000000000000000021",
+    date: new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10),
+    startMin: 1020,
+    endMin: 1080,
+    customerName: "Phone Caller",
+    customerPhone: "98765 43210",
+  };
+
+  it("takes the customer's details in the formats a person says them", () => {
+    const parsed = adminBookingCreateSchema.parse(base);
+    assert.equal(parsed.customerPhone, "9876543210");
+    assert.equal(parsed.amountPaid, 0, "collect at the ground unless the owner says otherwise");
+  });
+
+  it("refuses a negative collection or a number that is not a mobile", () => {
+    assert.equal(adminBookingCreateSchema.safeParse({ ...base, amountPaid: -1 }).success, false);
+    assert.equal(adminBookingCreateSchema.safeParse({ ...base, customerPhone: "12345" }).success, false);
+  });
+
+  /** No price field exists at all: the schedule decides, so there is nothing to tamper with. */
+  it("has no way to state a price", () => {
+    const parsed: Record<string, unknown> = adminBookingCreateSchema.parse({ ...base, amount: 1, price: 1 });
+    assert.equal(parsed.amount, undefined);
+    assert.equal(parsed.price, undefined);
   });
 });
 

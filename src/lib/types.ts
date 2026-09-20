@@ -31,8 +31,18 @@ export type FacilityKind = "HOURLY" | "OVERS";
 /** One screenshot the customer sent. A booking may collect several. */
 export interface PaymentAttempt {
   id: string;
-  /** Null when an admin recorded the payment themselves, with no screenshot sent. */
+  /** Null when an admin recorded the payment themselves, or when the upload failed. */
   screenshotKey: string | null;
+  /**
+   * The 12-digit UPI reference the customer typed, which is what the owner
+   * actually matches against the bank statement.
+   *
+   * This — not the screenshot — is what proves a payment, so it is asked for on
+   * every online payment and an image that never arrives costs nobody a booking.
+   * Null on a payment an admin recorded by hand, where there is no UPI reference
+   * to give.
+   */
+  utr: string | null;
   uploadedAt: Date;
   /**
    * What the admin read off the screenshot, in rupees. Null until reviewed —
@@ -258,6 +268,15 @@ export interface BookingDoc {
   customerPhone: string;
   /** True when an OTP was verified for this number at booking time. */
   phoneVerified: boolean;
+  /**
+   * The staff member who took this booking over the phone, or null when the
+   * customer made it themselves.
+   *
+   * A booking somebody rang in for has no screenshot, no UTR and often no money
+   * yet, all of which read as problems on a booking that came off the website.
+   * This is what tells the two apart on the admin screen.
+   */
+  createdBy: string | null;
   status: BookingStatus;
   paymentVerificationStatus: PaymentStatus;
   /** Every screenshot sent for this booking, oldest first. Never overwritten. */

@@ -114,6 +114,8 @@ async function acceptPayment(
 }
 
 const SCREENSHOT = "payment-screenshots/test/shot.jpg";
+/** A well-formed UPI reference. Required for anything paid online. */
+const UTR = "123456789012";
 /** Matches the real key format, so the storage layer accepts it for deletion. */
 const REAL_SCREENSHOT = "payment-screenshots/2026-01-01/00000000-0000-4000-8000-000000000000.jpg";
 
@@ -354,6 +356,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerName: "Late Larry",
             customerPhone: "9876543210",
             paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
           }),
         /expired|verify your slot hold/i,
       );
@@ -755,7 +758,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerPhone: "9876543210",
             paymentScreenshotKey: null,
           }),
-        /payment screenshot/i,
+        /UPI reference number/i,
       );
 
       const booking = await service.submitBooking({
@@ -763,6 +766,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       assert.equal(booking.status, "PENDING");
       assert.equal(booking.payAtVenue, false);
@@ -785,7 +789,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerPhone: "9876543210",
             paymentScreenshotKey: null,
           }),
-        /payment screenshot/i,
+        /UPI reference number/i,
       );
     });
 
@@ -893,6 +897,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
         requirePhoneVerification: false,
       });
       assert.equal(booking.status, "PENDING");
@@ -913,6 +918,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerName: "Ravi Kumar",
             customerPhone: "9876543210",
             paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
             requirePhoneVerification: true,
             verifiedPhone: null,
           }),
@@ -938,6 +944,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerName: "Ravi Kumar",
             customerPhone: "9876543210",
             paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
             requirePhoneVerification: true,
             verifiedPhone: "9999999999",
           }),
@@ -955,6 +962,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
           customerName: "Ravi Kumar",
           customerPhone: "9876543210",
           paymentScreenshotKey: SCREENSHOT,
+          utr: UTR,
           requirePhoneVerification: true,
           verifiedPhone: null,
         }),
@@ -977,6 +985,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
         requirePhoneVerification: true,
         verifiedPhone: "9876543210",
       });
@@ -1059,6 +1068,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await acceptPayment(booking);
       await service.confirmBooking(booking._id, ADMIN);
@@ -1080,6 +1090,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       return { hold, booking };
     }
@@ -1124,6 +1135,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       };
 
       const first = await service.submitBooking(payload);
@@ -1141,6 +1153,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       };
 
       const results = await Promise.allSettled([service.submitBooking(payload), service.submitBooking(payload)]);
@@ -1161,6 +1174,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerName: "Ravi Kumar",
             customerPhone: "9876543210",
             paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
           }),
         /expired/i,
       );
@@ -1175,6 +1189,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerName: "Mallory",
             customerPhone: "9876543210",
             paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
           }),
         /verify your slot hold/i,
       );
@@ -1190,6 +1205,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Mallory",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
 
       // The attacker's booking owns only the attacker's own units.
@@ -1212,6 +1228,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
             customerName: "Ravi Kumar",
             customerPhone: "9876543210",
             paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
           }),
         /not taking bookings|expired|verify your slot hold/i,
       );
@@ -1228,6 +1245,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
     }
 
@@ -1318,6 +1336,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Retention Test",
         customerPhone: "9876500011",
         paymentScreenshotKey: REAL_SCREENSHOT,
+        utr: UTR,
       });
       await acceptPayment(booking);
       // Backdate the play date past the cutoff without going through the booking
@@ -1374,6 +1393,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Cash Payer",
         customerPhone: "9876500012",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await collections.bookings(db).updateOne({ _id: booking._id }, { $set: { date: pastDate(30) } });
 
@@ -1487,6 +1507,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
 
       // Block 5–6 only: the booking's 6–7 hour sits outside the blocked range.
@@ -1522,6 +1543,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
 
       const outcome = await service.blockSlots({
@@ -1548,6 +1570,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await acceptPayment(booking);
       await service.confirmBooking(booking._id, ADMIN);
@@ -1596,6 +1619,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await acceptPayment(booking);
       await service.confirmBooking(booking._id, ADMIN);
@@ -1626,6 +1650,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await service.rejectBooking(booking._id, "Payment not received", ADMIN);
 
@@ -1644,6 +1669,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
     }
 
@@ -1680,6 +1706,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       const withBalance = await service.addPaymentAttempt({
         bookingId: booking._id,
         screenshotKey: "payment-screenshots/test/balance.jpg",
+        utr: UTR,
       });
       assert.equal(withBalance.payments.length, 2, "the first screenshot must not be overwritten");
 
@@ -1696,7 +1723,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     it("keeps the full payment history rather than overwriting it", async () => {
       const booking = await pendingBooking();
       await acceptPayment(booking, 1400);
-      const withBalance = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/b.jpg" });
+      const withBalance = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/b.jpg", utr: UTR });
       const settled = await acceptPayment(withBalance, 200);
 
       assert.deepEqual(
@@ -1731,7 +1758,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       );
 
       // And the customer can still put it right.
-      const retried = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/clear.jpg" });
+      const retried = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/clear.jpg", utr: UTR });
       assert.equal(
         retried.paymentVerificationStatus,
         "PENDING",
@@ -1745,7 +1772,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       const booking = await pendingBooking();
       await acceptPayment(booking, 1400);
 
-      const withBalance = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/balance.jpg" });
+      const withBalance = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/balance.jpg", utr: UTR });
       assert.equal(
         withBalance.paymentVerificationStatus,
         "PARTIAL",
@@ -1868,7 +1895,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("lets two admins review two screenshots at once without losing either", async () => {
       const booking = await pendingBooking();
-      const second = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/second.jpg" });
+      const second = await service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/second.jpg", utr: UTR });
       const [first, other] = second.payments;
 
       await Promise.all([
@@ -1908,7 +1935,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       await service.confirmBooking(booking._id, ADMIN);
 
       await assert.rejects(
-        () => service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/late.jpg" }),
+        () => service.addPaymentAttempt({ bookingId: booking._id, screenshotKey: "a/late.jpg", utr: UTR }),
         /not waiting for a payment/i,
       );
     });
@@ -1938,7 +1965,309 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
   });
 
+  /* ── The UPI reference, and bookings taken on the telephone ─────────── */
+
+  describe("payment reference (UTR)", () => {
+    it("refuses an online booking with no reference, even with a screenshot", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(21),
+        startMin: 1020,
+        endMin: 1080,
+      });
+
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: SCREENSHOT,
+            utr: null,
+          }),
+        /UPI reference number/i,
+      );
+
+      // And the slot is still the customer's to finish with.
+      const units = await collections.slotUnits(db).find({ holdTokenHash: { $ne: null }, date: futureDate(21) }).toArray();
+      assert.ok(units.every((u) => u.status === "HELD"));
+    });
+
+    it("books on the reference alone when the screenshot never uploaded", async () => {
+      const date = futureDate(22);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        utr: UTR,
+      });
+
+      assert.equal(booking.status, "PENDING");
+      assert.equal(booking.paymentScreenshotKey, null);
+      assert.equal(booking.payments.length, 1, "the payment is recorded even with no image");
+      assert.equal(booking.payments[0]!.utr, UTR);
+      assert.equal(booking.payments[0]!.screenshotKey, null);
+      assert.ok(booking.timeline.some((t) => t.event === "PAYMENT_UTR_ENTERED"));
+
+      // The admin can still accept it: the money is traced by the reference.
+      const accepted = await acceptPayment(booking);
+      assert.equal(accepted.paymentVerificationStatus, "VERIFIED");
+    });
+
+    it("keeps the reference on a balance payment too", async () => {
+      const date = futureDate(23);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      await acceptPayment(booking, 800);
+
+      const topped = await service.addPaymentAttempt({
+        bookingId: booking._id,
+        screenshotKey: null,
+        utr: "210987654321",
+      });
+      assert.equal(topped.payments.length, 2);
+      assert.equal(topped.payments[1]!.utr, "210987654321");
+      // The first screenshot is still the one on file — a failed upload did not erase it.
+      assert.equal(topped.paymentScreenshotKey, SCREENSHOT);
+    });
+
+    it("asks for nothing when the session is paid for at the ground", async () => {
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: futureDate(24),
+        startMin: 1020,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      assert.equal(hold.payAtVenue, true);
+
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        utr: null,
+      });
+      assert.equal(booking.status, "CONFIRMED");
+      assert.equal(booking.payments.length, 0);
+    });
+  });
+
+  describe("bookings taken over the telephone", () => {
+    it("confirms the slot immediately and records who took it", async () => {
+      const date = futureDate(25);
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date,
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "Phone Caller",
+        customerPhone: "9876543210",
+        admin: ADMIN,
+      });
+
+      assert.equal(booking.status, "CONFIRMED");
+      assert.equal(booking.createdBy, ADMIN.username);
+      assert.equal(booking.amount, 800, "priced from the schedule, not from the request");
+      assert.equal(booking.payments.length, 0);
+      assert.ok(booking.timeline.some((t) => t.event === "BOOKING_TAKEN_BY_STAFF"));
+
+      const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
+      assert.equal(units.length, 1);
+      assert.ok(units.every((u) => u.status === "BOOKED"), "the slot is gone the moment the call ends");
+    });
+
+    it("cannot be written over a slot a customer already holds", async () => {
+      const date = futureDate(26);
+      await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+
+      await assert.rejects(
+        () =>
+          service.createManualBooking({
+            resourceId: RESOURCE_ID,
+            date,
+            startMin: 1020,
+            endMin: 1080,
+            customerName: "Phone Caller",
+            customerPhone: "9876543210",
+            admin: ADMIN,
+          }),
+        /taken|no longer available|conflict/i,
+      );
+    });
+
+    it("gives one winner when the owner and a customer take the same slot at once", async () => {
+      const date = futureDate(27);
+      const results = await Promise.allSettled([
+        service.createManualBooking({
+          resourceId: RESOURCE_ID,
+          date,
+          startMin: 1140,
+          endMin: 1200,
+          customerName: "Phone Caller",
+          customerPhone: "9876543210",
+          admin: ADMIN,
+        }),
+        (async () => {
+          const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1200 });
+          return service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Website Customer",
+            customerPhone: "9876543211",
+            paymentScreenshotKey: SCREENSHOT,
+            utr: UTR,
+          });
+        })(),
+      ]);
+
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1, "exactly one may have the slot");
+
+      const units = await collections.slotUnits(db).find({ resourceId: RESOURCE_ID, date, startMin: 1140 }).toArray();
+      assert.equal(units.length, 1, "the unique index still owns the identity");
+    });
+
+    it("refuses to bank more than the booking costs", async () => {
+      const date = futureDate(28);
+      await assert.rejects(
+        () =>
+          service.createManualBooking({
+            resourceId: RESOURCE_ID,
+            date,
+            startMin: 1020,
+            endMin: 1080,
+            customerName: "Phone Caller",
+            customerPhone: "9876543210",
+            amountPaid: 5000,
+            admin: ADMIN,
+          }),
+        /more than the booking costs/i,
+      );
+
+      // The refusal gave the slot straight back rather than leaving a phantom hold.
+      const units = await collections.slotUnits(db).find({ resourceId: RESOURCE_ID, date, startMin: 1020 }).toArray();
+      assert.ok(units.every((u) => u.status === "AVAILABLE"), "a refused call leaves nothing reserved");
+    });
+
+    it("banks the cash the owner took on the call", async () => {
+      const date = futureDate(29);
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date,
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "Phone Caller",
+        customerPhone: "9876543210",
+        amountPaid: 800,
+        note: "Paid by UPI while on the call",
+        admin: ADMIN,
+      });
+
+      assert.equal(booking.amountPaid, 800);
+      assert.equal(booking.paymentVerificationStatus, "VERIFIED");
+      assert.equal(booking.status, "CONFIRMED");
+    });
+
+    it("lets the owner record the money later, at the ground", async () => {
+      const date = futureDate(21);
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date,
+        startMin: 1140,
+        endMin: 1200,
+        customerName: "Phone Caller",
+        customerPhone: "9876543210",
+        admin: ADMIN,
+      });
+      assert.equal(booking.amountPaid, 0);
+
+      const paid = await service.recordManualPayment({
+        bookingId: booking._id,
+        amount: booking.amount,
+        note: "Cash at the gate",
+        admin: ADMIN,
+      });
+      assert.equal(paid.amountPaid, booking.amount);
+      assert.equal(paid.paymentVerificationStatus, "VERIFIED");
+    });
+
+    it("books a bowling session by overs, priced by its ball", async () => {
+      const date = futureDate(24);
+      const booking = await service.createManualBooking({
+        resourceId: BOWLING_ID,
+        date,
+        startMin: 1020,
+        overs: 30,
+        ballTypeId: "leather",
+        customerName: "Phone Caller",
+        customerPhone: "9876543210",
+        admin: ADMIN,
+      });
+
+      assert.equal(booking.overs, 30);
+      assert.equal(booking.ballTypeName, "Leather ball");
+      assert.equal(booking.amount, 300, "three blocks of ten overs at the leather price");
+      assert.equal(booking.endMin - booking.startMin, 45);
+      assert.equal(booking.status, "CONFIRMED");
+    });
+
+    it("reaches past the window customers are held to, but never into the past", async () => {
+      const far = new Date(Date.now() + IST_OFFSET + 200 * 86_400_000).toISOString().slice(0, 10);
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date: far,
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "Tournament Regular",
+        customerPhone: "9876543210",
+        admin: ADMIN,
+      });
+      assert.equal(booking.date, far);
+
+      await assert.rejects(
+        () =>
+          service.createManualBooking({
+            resourceId: RESOURCE_ID,
+            date: pastDate(),
+            startMin: 1020,
+            endMin: 1080,
+            customerName: "Tournament Regular",
+            customerPhone: "9876543210",
+            admin: ADMIN,
+          }),
+        /passed/i,
+      );
+    });
+
+    it("will not take a booking on a day the ground is closed", async () => {
+      const date = futureDate(28);
+      await service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Festival", force: false, admin: ADMIN });
+
+      await assert.rejects(
+        () =>
+          service.createManualBooking({
+            resourceId: RESOURCE_ID,
+            date,
+            startMin: 1020,
+            endMin: 1080,
+            customerName: "Phone Caller",
+            customerPhone: "9876543210",
+            admin: ADMIN,
+          }),
+        /not taking bookings/i,
+      );
+    });
+  });
+
   /* ── Database consistency after everything above ───────────────────── */
+
 
   describe("database consistency", () => {
     it("holds no duplicate unit identity, orphan hold or booking without slots", async () => {
@@ -1950,6 +2279,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await acceptPayment(bookingA);
       await service.confirmBooking(bookingA._id, ADMIN);
@@ -1960,6 +2290,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         customerName: "Sita R",
         customerPhone: "9876543211",
         paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
       });
       await service.rejectBooking(bookingB._id, "Payment not received", ADMIN);
 

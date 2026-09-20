@@ -61,16 +61,59 @@ export const screenshotKeySchema = z
   .string()
   .regex(SCREENSHOT_KEY_PATTERN, "That payment screenshot is no longer available. Please upload it again.");
 
+/**
+ * The UPI reference number off the payment app — 12 digits, and the thing the
+ * owner searches for in the bank statement.
+ *
+ * Spaces are stripped because people copy it out of a notification with them,
+ * and the digits are checked here so a typo is caught while the customer is
+ * still on the payment screen rather than at the ground.
+ */
+export const utrSchema = z
+  .string()
+  .trim()
+  .transform((raw) => raw.replace(/[\s-]/g, ""))
+  .refine((v) => /^\d{12}$/.test(v), "Enter the 12-digit UPI reference number (UTR) from your payment app");
+
 export const bookingSubmitSchema = z.object({
   holdToken: z.string().min(32).max(128),
   customerName: customerNameSchema,
   customerPhone: phoneSchema,
   /**
-   * Absent for a session small enough to pay for at the ground. Still checked for
-   * shape when present, and the SERVER decides whether leaving it out is allowed —
-   * omitting it never makes a booking free by itself.
+   * Absent when the upload did not go through, and absent for a session small
+   * enough to pay for at the ground. Still checked for shape when present.
+   *
+   * A booking is no longer refused for want of an image: the UTR below is what
+   * the owner reconciles against, and a customer who has genuinely paid should
+   * not lose their slot because a photo would not upload on ground wifi.
    */
   paymentScreenshotKey: screenshotKeySchema.nullish().transform((v) => v ?? null),
+  /**
+   * Required for anything paid online — the SERVER decides which those are, from
+   * the hold, so omitting it never makes a booking free.
+   */
+  utr: utrSchema.nullish().transform((v) => v ?? null),
+});
+
+/**
+ * A booking the owner takes over the phone.
+ *
+ * It says WHAT to book in exactly the language the facility speaks — an hourly
+ * range, or a start plus overs and a ball — and never what it costs: the amount
+ * is computed from the stored schedule, the same as for a customer booking.
+ */
+export const adminBookingCreateSchema = z.object({
+  resourceId: objectIdSchema,
+  date: businessDateSchema,
+  startMin: minuteOfDaySchema,
+  endMin: minuteOfDaySchema.optional(),
+  overs: z.number().int().min(1).max(10_000).optional(),
+  ballTypeId: z.string().trim().min(1).max(40).optional(),
+  customerName: customerNameSchema,
+  customerPhone: phoneSchema,
+  /** Money taken there and then. Zero (the default) means collect at the ground. */
+  amountPaid: z.number().int().min(0).max(1_000_000).default(0),
+  note: z.string().trim().max(300).default(""),
 });
 
 export const availabilityQuerySchema = z.object({
@@ -112,6 +155,8 @@ export const bookingActionSchema = z.discriminatedUnion("action", [
     action: z.literal("RECORD_PAYMENT"),
     amount: z.number().int().min(1).max(1_000_000),
     note: z.string().trim().min(3, "Say where this payment came from").max(300),
+    /** Optional: cash has no reference, a UPI transfer read off the statement does. */
+    utr: utrSchema.nullish().transform((v) => v ?? null),
   }),
   z.object({ action: z.literal("CONFIRM") }),
   /** The only destructive action: releases the slots. */
@@ -119,8 +164,10 @@ export const bookingActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("WHATSAPP_OPENED"), kind: z.enum(["CONFIRM", "REJECT", "BALANCE"]) }),
 ]);
 
+/** A balance payment is evidenced the same way a first payment is: UTR always, image if it uploads. */
 export const addPaymentSchema = z.object({
-  paymentScreenshotKey: screenshotKeySchema,
+  paymentScreenshotKey: screenshotKeySchema.nullish().transform((v) => v ?? null),
+  utr: utrSchema,
 });
 
 /**

@@ -422,14 +422,28 @@ function resolveRequest(ctx: ResourceContext, input: BookingRequest): ResolvedRe
  *     quarter-hours rolls the first three back. Nothing is ever half reserved.
  */
 export async function createHold(
-  input: BookingRequest & { resourceId: ObjectId; date: string; now?: Date },
+  input: BookingRequest & {
+    resourceId: ObjectId;
+    date: string;
+    now?: Date;
+    /**
+     * Staff only: ignore how far ahead CUSTOMERS may book.
+     *
+     * The window is a rule about the website, not about the ground. When a regular
+     * rings up for a tournament next month the owner should be able to write it in,
+     * and the dates that still cannot be booked — the past, a closed day, a taken
+     * slot — are enforced below regardless.
+     */
+    bypassWindow?: boolean;
+  },
 ): Promise<HoldResult> {
   const now = input.now ?? new Date();
   const db = await getDb();
   const ctx = await loadResourceContext(db, input.resourceId, true);
   const { location, facility, resource, config } = ctx;
 
-  assertBookableDate(input.date, config.bookingWindowDays, now);
+  if (input.bypassWindow) assertNotPast(input.date, now);
+  else assertBookableDate(input.date, config.bookingWindowDays, now);
 
   const { startMin, endMin, units, overs, ballType } = resolveRequest(ctx, input);
 
@@ -671,6 +685,19 @@ export interface SubmitBookingInput {
    */
   paymentScreenshotKey: string | null;
   /**
+   * The 12-digit UPI reference. Required for anything paid online — this, not the
+   * screenshot, is what the owner reconciles against the bank statement — and
+   * null for a session paid for at the ground or written in by staff.
+   */
+  utr?: string | null;
+  /**
+   * Set when the owner is taking this booking over the phone: no payment evidence
+   * is expected, the number is not asked to verify itself, and the booking is
+   * confirmed on the spot. Supplied by the admin route from the session, never
+   * from a request body.
+   */
+  bookedBy?: string | null;
+  /**
    * The number this device proved it controls, or null when verification is
    * switched off. Supplied by the route from a signed httpOnly cookie, never
    * from the request body — a client claiming "I am verified" proves nothing.
@@ -701,9 +728,12 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
     if (existing) return existing;
   }
 
+  const bookedBy = input.bookedBy ?? null;
+
   // Checked before the slots are consumed, so a customer who has not verified
-  // their number keeps the hold and can finish rather than losing the slot.
-  if (input.requirePhoneVerification && input.verifiedPhone !== input.customerPhone) {
+  // their number keeps the hold and can finish rather than losing the slot. Staff
+  // on the phone are exempt: the owner is talking to the person.
+  if (!bookedBy && input.requirePhoneVerification && input.verifiedPhone !== input.customerPhone) {
     throw appError("VALIDATION", "Please verify your mobile number before booking.");
   }
 
@@ -744,13 +774,24 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   }
 
   // Decided from the hold and the stored configuration, never from the request:
-  // a client that simply omits its screenshot does not thereby book for free.
+  // a client that simply omits its payment details does not thereby book for free.
+  //
+  // What is demanded is the UTR rather than the image. A screenshot that would not
+  // upload is a phone problem; the reference number the customer read off their
+  // payment app is what the money is actually traced by, so that is the one thing
+  // a booking cannot be made without. Staff writing in a phone booking are past
+  // this entirely — they are standing next to the till.
   const payAtVenue = isPayAtVenue(config, overs);
-  if (!payAtVenue && !input.paymentScreenshotKey) {
-    throw appError("VALIDATION", "Please upload your payment screenshot to finish booking.");
+  const utr = bookedBy ? null : (input.utr ?? null);
+  if (!bookedBy && !payAtVenue && !utr) {
+    throw appError("VALIDATION", "Please enter the 12-digit UPI reference number (UTR) to finish booking.");
   }
 
-  assertBookableDate(date, config.bookingWindowDays, now);
+  // Same rule as the hold: the customer's booking window is a website rule, and
+  // staff writing in a phone booking are not held to it. The date must still not
+  // be in the past, which the hold already refused.
+  if (bookedBy) assertNotPast(date, now);
+  else assertBookableDate(date, config.bookingWindowDays, now);
 
   const priceBreakdown = resolved.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price }));
   const amount = totalPrice(resolved);
@@ -781,16 +822,23 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       customerName: input.customerName,
       customerPhone: input.customerPhone,
       phoneVerified: input.verifiedPhone === input.customerPhone,
+      createdBy: bookedBy,
       // A pay-at-venue session is confirmed immediately: there is nothing for an
       // admin to verify, and leaving it PENDING would put a queue in front of a
       // booking the owner has already agreed to take money for at the gate.
-      status: payAtVenue ? "CONFIRMED" : "PENDING",
+      // A staff booking is agreed on the telephone, so it is confirmed in the same
+      // breath, exactly like a pay-at-the-ground session.
+      status: payAtVenue || bookedBy ? "CONFIRMED" : "PENDING",
       paymentVerificationStatus: "PENDING",
-      payments: input.paymentScreenshotKey
+      // An attempt is recorded whenever the customer paid — whether or not the
+      // image made it through. Without this a payment whose screenshot failed
+      // would leave no UTR anywhere for the owner to check.
+      payments: utr
         ? [
             {
               id: crypto.randomUUID(),
               screenshotKey: input.paymentScreenshotKey,
+              utr,
               uploadedAt: now,
               amount: null,
               status: "PENDING",
@@ -805,15 +853,25 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       paymentUploadedAt: input.paymentScreenshotKey ? now : null,
       rejectionReason: null,
       holdTokenHash,
-      timeline: payAtVenue
+      timeline: bookedBy
         ? [
-            { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
-            { event: "BOOKING_CONFIRMED", at: now, by: "system", note: "Paying at the ground" },
+            { event: "BOOKING_TAKEN_BY_STAFF", at: now, by: bookedBy, note: "Booked over the phone" },
+            { event: "BOOKING_CONFIRMED", at: now, by: bookedBy },
           ]
-        : [
-            { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
-            { event: "PAYMENT_SCREENSHOT_UPLOADED", at: now, by: "customer" },
-          ],
+        : payAtVenue
+          ? [
+              { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
+              { event: "BOOKING_CONFIRMED", at: now, by: "system", note: "Paying at the ground" },
+            ]
+          : [
+              { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
+              {
+                event: input.paymentScreenshotKey ? "PAYMENT_SCREENSHOT_UPLOADED" : "PAYMENT_UTR_ENTERED",
+                at: now,
+                by: "customer",
+                note: "UTR " + utr,
+              },
+            ],
       createdAt: now,
       updatedAt: now,
     };
@@ -828,7 +886,14 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
         // goes straight to BOOKED, because it is confirmed in the same breath.
         const claim = await collections.slotUnits(txDb).updateMany(
           { holdTokenHash, status: "HELD", holdUntil: { $gt: now }, bookingId: null },
-          { $set: { status: payAtVenue ? "BOOKED" : "PENDING", bookingId, holdUntil: null, updatedAt: now } },
+          {
+            $set: {
+              status: payAtVenue || bookedBy ? "BOOKED" : "PENDING",
+              bookingId,
+              holdUntil: null,
+              updatedAt: now,
+            },
+          },
           { session },
         );
         if (claim.modifiedCount !== units.length) throw appError("HOLD_EXPIRED");
@@ -853,6 +918,102 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   }
 
   throw appError("INTERNAL", "Unable to process your booking right now. Please try again.");
+}
+
+/**
+ * A booking the owner takes over the telephone.
+ *
+ * Built out of the same two steps a customer goes through — hold, then submit —
+ * rather than writing slots directly. That is the whole point: the unique index,
+ * the transaction, the day-block check, the closing-time arithmetic and the
+ * server-side pricing are the ones already proven under load, so a booking
+ * written in by hand cannot double-book a slot a customer is paying for at that
+ * moment, and cannot be entered at a price the schedule does not say.
+ *
+ * What differs from a customer booking is only what staff are trusted with: the
+ * customer's booking window does not apply, the number is not asked to verify
+ * itself, no payment evidence is required, and the booking is confirmed on the
+ * spot — the owner has just agreed it on the phone.
+ */
+export async function createManualBooking(input: {
+  resourceId: ObjectId;
+  date: string;
+  startMin: number;
+  endMin?: number;
+  overs?: number;
+  ballTypeId?: string;
+  customerName: string;
+  customerPhone: string;
+  /** Money taken there and then. Zero means it is collected at the ground. */
+  amountPaid?: number;
+  note?: string;
+  admin: { username: string };
+  now?: Date;
+}): Promise<BookingDoc> {
+  const now = input.now ?? new Date();
+
+  const hold = await createHold({
+    resourceId: input.resourceId,
+    date: input.date,
+    startMin: input.startMin,
+    endMin: input.endMin,
+    overs: input.overs,
+    ballTypeId: input.ballTypeId,
+    bypassWindow: true,
+    now,
+  });
+
+  const paid = input.amountPaid ?? 0;
+  if (paid > hold.amount) {
+    // Refused rather than banked: a booking that has taken more than it costs is
+    // indistinguishable afterwards from a mis-keyed amount, and the owner would
+    // be chasing a refund they cannot see.
+    await releaseHold(hold.holdToken);
+    throw appError(
+      "VALIDATION",
+      `That is more than the booking costs (${hold.amount}). Enter what was actually collected.`,
+    );
+  }
+
+  let booking: BookingDoc;
+  try {
+    booking = await submitBooking({
+      holdToken: hold.holdToken,
+      customerName: input.customerName,
+      customerPhone: input.customerPhone,
+      paymentScreenshotKey: null,
+      bookedBy: input.admin.username,
+      now,
+    });
+  } catch (err) {
+    // The slots are ours for the next few minutes and nobody is coming back for
+    // them, so hand them straight back rather than leaving a phantom hold on the
+    // grid while the owner is still on the call.
+    await releaseHold(hold.holdToken);
+    throw err;
+  }
+
+  log.info("booking_taken_by_staff", {
+    reference: booking.reference,
+    resourceId: input.resourceId.toHexString(),
+    date: input.date,
+    startMin: booking.startMin,
+    endMin: booking.endMin,
+    amount: booking.amount,
+    collected: paid,
+    admin: input.admin.username,
+  });
+
+  if (paid > 0) {
+    return recordManualPayment({
+      bookingId: booking._id,
+      amount: paid,
+      note: input.note || "Collected when the booking was taken over the phone",
+      admin: input.admin,
+    });
+  }
+
+  return booking;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1030,6 +1191,8 @@ export async function recordManualPayment(input: {
   bookingId: ObjectId;
   amount: number;
   note: string;
+  /** Present when the admin is entering a UPI payment they can see in the statement. */
+  utr?: string | null;
   admin: { username: string };
 }): Promise<BookingDoc> {
   const db = await getDb();
@@ -1042,6 +1205,7 @@ export async function recordManualPayment(input: {
   const attempt: PaymentAttempt = {
     id: crypto.randomUUID(),
     screenshotKey: null,
+    utr: input.utr ?? null,
     uploadedAt: now,
     amount: input.amount,
     status: "ACCEPTED",
@@ -1054,12 +1218,16 @@ export async function recordManualPayment(input: {
     {
       _id: input.bookingId,
       /**
-       * A pay-at-the-ground booking is CONFIRMED from the moment it is made and
-       * still owes its money, so this is the only way that cash ever gets
-       * recorded. Without it the owner takes ₹720 at the gate and the booking
-       * reads as unpaid for ever.
+       * A pay-at-the-ground booking — and one the owner took over the phone — is
+       * CONFIRMED from the moment it is made and still owes its money, so this is
+       * the only way that cash ever gets recorded. Without it the owner takes ₹720
+       * at the gate and the booking reads as unpaid for ever.
        */
-      $or: [{ status: "PENDING" }, { status: "CONFIRMED", payAtVenue: true }],
+      $or: [
+        { status: "PENDING" },
+        { status: "CONFIRMED", payAtVenue: true },
+        { status: "CONFIRMED", createdBy: { $ne: null } },
+      ],
       // Same spam ceiling as customer uploads.
       $expr: { $lt: [{ $size: { $ifNull: ["$payments", []] } }, 10] },
     },
@@ -1101,7 +1269,9 @@ export async function recordManualPayment(input: {
  */
 export async function addPaymentAttempt(input: {
   bookingId: ObjectId;
-  screenshotKey: string;
+  /** Null when the upload failed; the UTR below is what the payment is traced by. */
+  screenshotKey: string | null;
+  utr: string;
   now?: Date;
 }): Promise<BookingDoc> {
   const db = await getDb();
@@ -1109,6 +1279,7 @@ export async function addPaymentAttempt(input: {
   const attempt: PaymentAttempt = {
     id: crypto.randomUUID(),
     screenshotKey: input.screenshotKey,
+    utr: input.utr,
     uploadedAt: now,
     amount: null,
     status: "PENDING",
@@ -1135,10 +1306,20 @@ export async function addPaymentAttempt(input: {
           timeline: {
             $concatArrays: [
               { $ifNull: ["$timeline", []] },
-              [{ $literal: timelineEntry("PAYMENT_SCREENSHOT_UPLOADED", "customer") }],
+              [
+                {
+                  $literal: timelineEntry(
+                    input.screenshotKey ? "PAYMENT_SCREENSHOT_UPLOADED" : "PAYMENT_UTR_ENTERED",
+                    "customer",
+                    "UTR " + input.utr,
+                  ),
+                },
+              ],
             ],
           },
-          paymentScreenshotKey: input.screenshotKey,
+          // Left alone when no image came through, so the admin screen keeps
+          // pointing at the last screenshot that actually exists.
+          ...(input.screenshotKey ? { paymentScreenshotKey: input.screenshotKey } : {}),
           paymentUploadedAt: now,
           updatedAt: now,
           /**

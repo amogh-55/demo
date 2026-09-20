@@ -7,6 +7,7 @@ import { formatBusinessDate, formatIstTimestamp, formatRange, minutesToDuration 
 import { Alert, Button, EmptyState, Spinner, StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PaymentReviewDialog, type PaymentAttemptView } from "@/components/admin/payment-review-dialog";
+import { ManualBookingDialog, type ManualBookingFacility } from "@/components/admin/manual-booking-dialog";
 
 interface AdminBooking {
   id: string;
@@ -21,6 +22,8 @@ interface AdminBooking {
   phoneVerified: boolean;
   /** Short bowling sessions: confirmed on the spot, cash due at the ground. */
   payAtVenue: boolean;
+  /** Set when the owner took this booking over the phone, so it has no payment behind it. */
+  createdBy: string | null;
   date: string;
   startMin: number;
   endMin: number;
@@ -55,9 +58,15 @@ const REJECT_REASONS = ["Customer cancelled", "Customer not reachable", "Duplica
 
 export function BookingsManager({
   locations,
+  facilities,
+  today,
   initialFilters,
 }: {
   locations: Array<{ id: string; name: string }>;
+  /** Everything bookable, for the phone-booking dialog. */
+  facilities: ManualBookingFacility[];
+  /** Today in Asia/Kolkata, from the server — never the admin's device clock. */
+  today: string;
   initialFilters: { locationId?: string; date?: string; status?: string; payment?: string; search?: string };
 }) {
   const [locationId, setLocationId] = React.useState(initialFilters.locationId ?? "");
@@ -193,8 +202,33 @@ export function BookingsManager({
   const bookings = data?.bookings ?? [];
   const activeFilters = [locationId, date, status, payment, search].filter(Boolean).length;
 
+  const addBooking =
+    facilities.length > 0 ? (
+      <ManualBookingDialog
+        locations={locations}
+        facilities={facilities}
+        today={today}
+        onCreated={(message) => {
+          setActionError(null);
+          setNotice(message);
+          void load();
+        }}
+      />
+    ) : null;
+
   return (
     <div className="space-y-4">
+      {/* The title and the one thing the owner comes here to ADD share a row, so
+          the button sits top-right where it is looked for. It goes full width
+          under the title on a phone, where a small right-aligned button is a
+          thumb-miss. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-ink-900">Bookings</h1>
+          <p className="text-sm text-ink-600">Verify payments, accept or reject requests.</p>
+        </div>
+        {addBooking}
+      </div>
       {/* Filters */}
       <section className="card" aria-label="Filters">
         {/* Five stacked fields fill a phone screen, so the bookings only start below the fold. */}
@@ -379,8 +413,8 @@ export function BookingsManager({
         onReject={(attemptId, note) =>
           reviewing && void reviewPayment(reviewing, { action: "REJECT_PAYMENT", attemptId, note })
         }
-        onRecord={(amount, note, confirmBooking) =>
-          reviewing && void reviewPayment(reviewing, { action: "RECORD_PAYMENT", amount, note }, confirmBooking)
+        onRecord={(amount, note, confirmBooking, utr) =>
+          reviewing && void reviewPayment(reviewing, { action: "RECORD_PAYMENT", amount, note, utr }, confirmBooking)
         }
       />
 
@@ -451,6 +485,8 @@ function BookingCard({
   onWhatsapp: (kind: "CONFIRM" | "REJECT" | "BALANCE") => void;
 }) {
   const isPending = booking.status === "PENDING";
+  /** The reference on the most recent payment that carries one. */
+  const latestUtr = [...booking.payments].reverse().find((p) => p.utr)?.utr ?? null;
   // Confirming needs the money to actually add up, not just a verified flag.
   const paidInFull = booking.paymentVerificationStatus === "VERIFIED" && booking.amountRemaining <= 0;
   const partPaid = isPending && booking.amountRemaining > 0 && booking.amountPaid > 0;
@@ -529,14 +565,33 @@ function BookingCard({
             <span className={cn("text-xs font-semibold", paidInFull ? "text-green-700" : "text-amber-700")}>
               {formatCurrency(booking.amountPaid)} received
             </span>
-          ) : booking.payAtVenue ? (
-            // Not a payment to chase: this customer was told to pay at the gate.
+          ) : booking.payAtVenue || booking.createdBy ? (
+            // Not a payment to chase: this one was always going to be paid at the gate.
             <span className="text-xs font-semibold text-amber-700">collect at the ground</span>
           ) : (
             <span className="text-xs text-ink-500">nothing received</span>
           )}
         </p>
       </div>
+
+      {/* The UTR, spelled out on the card: it is the first thing the owner looks
+          for when matching a booking to a line in the bank statement, and asking
+          them to open a dialog for it would mean opening one per booking. */}
+      {latestUtr ? (
+        <p className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="text-ink-500">UTR</span>
+          <span className="select-all font-mono font-semibold tracking-wide text-ink-800">{latestUtr}</span>
+          {!booking.hasScreenshot ? (
+            <span className="text-xs text-ink-500">(no screenshot — check the statement)</span>
+          ) : null}
+        </p>
+      ) : null}
+
+      {booking.createdBy ? (
+        <p className="mt-2 text-sm text-ink-600">
+          Taken over the phone by <span className="font-medium text-ink-800">{booking.createdBy}</span>.
+        </p>
+      ) : null}
 
       {partPaid ? (
         <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
@@ -591,8 +646,10 @@ function BookingCard({
               <ExternalLink className="h-3 w-3" aria-hidden="true" />
             </Button>
           </a>
-        ) : (
-          <span className="self-center text-sm text-ink-500">No screenshot uploaded</span>
+        ) : booking.createdBy ? null : (
+          <span className="self-center text-sm text-ink-500">
+            {latestUtr ? "No screenshot — the UTR above is the payment" : "No screenshot uploaded"}
+          </span>
         )}
 
         {/* Releasing someone's slots is irreversible, so it is pushed to the end and

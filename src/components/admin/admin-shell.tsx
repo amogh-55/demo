@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { CalendarRange, ClipboardList, LayoutDashboard, LogOut, MapPin, Settings } from "lucide-react";
 import { api } from "@/lib/client";
-import { Button, cn } from "@/components/ui/primitives";
+import { Button, Spinner, cn } from "@/components/ui/primitives";
 
 /** Mirrors the server session shape; kept local so this client file never imports server code. */
 interface AdminSessionView {
@@ -42,13 +42,26 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
 
   /**
    * Every admin page is server-rendered against the database, so a tab tap has a
-   * real round-trip behind it. Moving the highlight on tap rather than on arrival
-   * means the tab bar answers immediately and the wait is visible where it is
-   * actually happening.
+   * real round-trip behind it and needs to answer immediately.
+   *
+   * It answers by marking the tapped tab as BUSY — not by moving the highlight.
+   * Moving it was a lie the screen could get stuck inside: tap quickly between
+   * tabs and the highlight belonged to a page that was cancelled on the way,
+   * leaving Settings lit above the bookings list. The highlight now only ever
+   * says where you are, which is the one thing it cannot be wrong about.
    */
-  const [tapped, setTapped] = React.useState<string | null>(null);
-  React.useEffect(() => setTapped(null), [pathname]);
-  const highlighted = (href: string) => (tapped ? tapped === href : isActive(href));
+  const [pendingHref, setPendingHref] = React.useState<string | null>(null);
+  React.useEffect(() => setPendingHref(null), [pathname]);
+
+  // A navigation that never arrives — cancelled by the next tap, or a request that
+  // failed — must not leave a tab spinning for the rest of the session.
+  React.useEffect(() => {
+    if (!pendingHref) return;
+    const timer = window.setTimeout(() => setPendingHref(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [pendingHref]);
+
+  const startNavigation = (href: string) => setPendingHref(isActive(href) ? null : href);
 
   return (
     // Opaque, not `bg-ink-50/60`: the document body is dark for the customer site,
@@ -60,23 +73,28 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
           <span className="font-semibold text-ink-900">Turf Admin</span>
         </div>
         <nav className="flex-1 space-y-1 p-3" aria-label="Admin sections">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setTapped(item.href)}
-              aria-current={isActive(item.href) ? "page" : undefined}
-              className={cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                highlighted(item.href)
-                  ? "bg-pitch-600 font-semibold text-white shadow-sm"
-                  : "text-ink-600 hover:bg-ink-50",
-              )}
-            >
-              <item.icon className="h-4 w-4" aria-hidden="true" />
-              {item.label}
-            </Link>
-          ))}
+          {NAV.map((item) => {
+            const on = isActive(item.href);
+            const loading = pendingHref === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => startNavigation(item.href)}
+                aria-current={on ? "page" : undefined}
+                aria-busy={loading || undefined}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  on ? "bg-pitch-600 font-semibold text-white shadow-sm" : "text-ink-600 hover:bg-ink-50",
+                  loading && !on && "bg-ink-100 text-ink-800",
+                )}
+              >
+                <item.icon className={cn("h-4 w-4", loading && "animate-pulse")} aria-hidden="true" />
+                {item.label}
+                {loading ? <Spinner className="ml-auto text-current" /> : null}
+              </Link>
+            );
+          })}
         </nav>
         <div className="border-t border-ink-100 p-3">
           <p className="px-3 pb-2 text-xs text-ink-500">
@@ -111,16 +129,19 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
           aria-label="Admin sections"
         >
           {NAV.map((item) => {
-            const on = highlighted(item.href);
+            const on = isActive(item.href);
+            const loading = pendingHref === item.href;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => setTapped(item.href)}
-                aria-current={isActive(item.href) ? "page" : undefined}
+                onClick={() => startNavigation(item.href)}
+                aria-current={on ? "page" : undefined}
+                aria-busy={loading || undefined}
                 className={cn(
                   "relative flex flex-col items-center gap-1 px-1 pb-2 pt-2.5 text-xs transition-colors",
                   on ? "font-semibold text-pitch-700" : "font-medium text-ink-500",
+                  loading && !on && "text-ink-800",
                 )}
               >
                 {/* A pale tint is invisible at arm's length on a phone, so the active
@@ -136,9 +157,13 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
                   className={cn(
                     "grid h-8 w-14 place-items-center rounded-full transition-colors",
                     on ? "bg-pitch-600 text-white shadow-sm" : "bg-transparent text-ink-500",
+                    loading && !on && "bg-ink-100 text-ink-800",
                   )}
                 >
-                  <item.icon className="h-5 w-5" aria-hidden="true" />
+                  {/* The tapped tab pulses until its page arrives. The filled pill
+                      stays where the owner actually is, so a tap that never lands
+                      cannot leave the wrong tab looking selected. */}
+                  <item.icon className={cn("h-5 w-5", loading && "animate-pulse")} aria-hidden="true" />
                 </span>
                 <span>{item.short}</span>
               </Link>
