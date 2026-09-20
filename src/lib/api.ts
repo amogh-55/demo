@@ -45,9 +45,32 @@ export function fail(err: unknown, context: Record<string, unknown> = {}) {
   return NextResponse.json({ error: { code: generic.code, message: generic.message } }, { status: 500 });
 }
 
+/**
+ * Nothing this API legitimately accepts comes near 32 KB — the largest real body
+ * is a booking with a name, a number and a storage key. Refusing a bigger one
+ * before it is parsed keeps a script posting megabytes from spending the
+ * server's memory and CPU on JSON that was never going to validate.
+ */
+const MAX_JSON_BYTES = 32 * 1024;
+
 export async function readJson(request: Request): Promise<unknown> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_JSON_BYTES) {
+    throw appError("VALIDATION", "That request was too large.");
+  }
+
+  let text: string;
   try {
-    return await request.json();
+    text = await request.text();
+  } catch {
+    throw appError("VALIDATION", "Malformed request.");
+  }
+  // A chunked body arrives with no content-length, so its real size is only
+  // known once it has been read.
+  if (text.length > MAX_JSON_BYTES) throw appError("VALIDATION", "That request was too large.");
+
+  try {
+    return JSON.parse(text);
   } catch {
     throw appError("VALIDATION", "Malformed request.");
   }

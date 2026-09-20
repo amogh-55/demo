@@ -10,6 +10,7 @@ import {
   locationCreateSchema,
 } from "../src/lib/validation";
 import { normaliseWhatsappNumber, confirmationMessage, rejectionMessage, whatsappUrl } from "../src/lib/whatsapp";
+import { readJson } from "../src/lib/api";
 
 describe("phone numbers", () => {
   it("normalises the formats Indian customers actually type", () => {
@@ -272,5 +273,40 @@ describe("WhatsApp links", () => {
     const message = rejectionMessage({ ...booking, reason: "Payment not received" });
     assert.ok(message.includes("could not be confirmed"));
     assert.ok(message.includes("Payment not received"));
+  });
+});
+
+describe("request bodies", () => {
+  const post = (body: string, headers: Record<string, string> = {}) =>
+    new Request("http://localhost/api/holds", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body,
+    });
+
+  it("reads an ordinary body", async () => {
+    assert.deepEqual(await readJson(post(JSON.stringify({ hello: "world" }))), { hello: "world" });
+  });
+
+  it("refuses malformed JSON without leaking the parser error", async () => {
+    await assert.rejects(readJson(post("{ not json")), /Malformed request/);
+  });
+
+  /**
+   * Nothing this API accepts is large. Parsing a megabyte before validating it
+   * spends the server's memory on a request that was never going to be valid,
+   * which is free for whoever sends it and not for us.
+   */
+  it("refuses a body far larger than anything it accepts", async () => {
+    const huge = JSON.stringify({ padding: "x".repeat(64 * 1024) });
+    await assert.rejects(readJson(post(huge)), /too large/i);
+  });
+
+  it("refuses an oversized body even when the length is not declared", async () => {
+    const huge = JSON.stringify({ padding: "x".repeat(64 * 1024) });
+    const request = new Request("http://localhost/api/holds", { method: "POST", body: huge });
+    // Strip the length the constructor worked out, so only the read-side guard is left.
+    request.headers.delete("content-length");
+    await assert.rejects(readJson(request), /too large/i);
   });
 });

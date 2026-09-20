@@ -448,6 +448,32 @@ export async function createHold(
     ...(overs !== null ? { overs } : {}),
   };
 
+  /**
+   * Fail fast on a slot that is plainly gone.
+   *
+   * When a hundred phones open the same 6 PM slot at once only one can win, and
+   * letting the other ninety-nine fight it out inside snapshot transactions makes
+   * each of them wait seconds for a refusal the database already knows about.
+   * This read is advisory only: it never grants anything, and the transaction
+   * below with its unique index remains the thing that actually decides. A slot
+   * freed between this read and that transaction simply falls through and is won
+   * there. BLOCKED is deliberately left out, so "the ground is closed then" keeps
+   * coming back with its own wording rather than "somebody beat you to it".
+   */
+  const alreadyTaken = await collections.slotUnits(db).countDocuments(
+    {
+      resourceId: input.resourceId,
+      date: input.date,
+      startMin: { $in: units.map((u) => u.startMin) },
+      $or: [{ status: { $in: ["PENDING", "BOOKED"] } }, { status: "HELD", holdUntil: { $gt: now } }],
+    },
+    { limit: 1 },
+  );
+  if (alreadyTaken > 0) {
+    log.info("hold_conflict_fast", context);
+    throw appError("SLOT_CONFLICT");
+  }
+
   try {
     await withTransaction(async (session, txDb) => {
       const dayBlock = await collections
