@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Menu, Phone, X } from "lucide-react";
+import { ArrowUp, Menu, Phone, X } from "lucide-react";
 import { Button, cn } from "@/components/ui/primitives";
 
 const LINKS = [
@@ -17,9 +17,21 @@ const LINKS = [
 export function SiteHeader({ businessName, supportPhone }: { businessName: string; supportPhone: string }) {
   const [scrolled, setScrolled] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  /**
+   * The hero has its own Book button a few centimetres below this one, and two
+   * of them stacked reads as a mistake. So the header's CTA only appears once
+   * the hero has scrolled away and the page no longer offers one.
+   */
+  const [pastHero, setPastHero] = React.useState(false);
 
   React.useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 24);
+    const onScroll = () => {
+      setScrolled(window.scrollY > 24);
+      // Measured against the viewport rather than a fixed pixel count, so it
+      // behaves the same on a phone as on a desktop — and on pages with no hero
+      // at all the first scroll brings the button straight in.
+      setPastHero(window.scrollY > window.innerHeight * 0.6);
+    };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
@@ -63,7 +75,9 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
               +91 {supportPhone}
             </a>
           ) : null}
-          <Link href="/book">
+          {/* Kept in the layout while hidden, so the header does not jolt sideways
+              the moment it appears. */}
+          <Link href="/book" className={cn("transition-opacity duration-300", pastHero ? "opacity-100" : "pointer-events-none opacity-0")} aria-hidden={!pastHero} tabIndex={pastHero ? undefined : -1}>
             <Button>Book now</Button>
           </Link>
           <button
@@ -98,8 +112,8 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
   );
 }
 
-/** Thumb-reachable booking CTA that appears after the hero on small screens. */
-export function StickyBookBar() {
+/** Back to the top, once there is enough page behind you to want it. */
+export function ScrollToTop() {
   const [visible, setVisible] = React.useState(false);
 
   React.useEffect(() => {
@@ -109,17 +123,17 @@ export function StickyBookBar() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  if (!visible) return null;
-
   return (
-    // 72px tall plus the home-indicator inset. The assistant's floating button in
-    // turf-assistant.tsx is offset to clear exactly that, so keep the two in step.
-    <div className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-ink-950/95 px-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-3 backdrop-blur lg:hidden">
-      <Link href="/book" className="block">
-        <Button size="lg" className="w-full">
-          Check availability
-        </Button>
-      </Link>
-    </div>
+    <button
+      type="button"
+      aria-label="Back to top"
+      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+      className={cn(
+        "fixed bottom-6 right-5 z-40 grid h-12 w-12 place-items-center rounded-full bg-lime-400 text-ink-950 shadow-lg transition-all duration-300 hover:bg-lime-300",
+        visible ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-3 opacity-0",
+      )}
+    >
+      <ArrowUp className="h-5 w-5" aria-hidden="true" />
+    </button>
   );
 }

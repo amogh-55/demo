@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-colors " +
+  "inline-flex items-center justify-center gap-2 rounded-full text-sm font-semibold transition-colors " +
     "disabled:pointer-events-none disabled:opacity-60",
   {
     variants: {

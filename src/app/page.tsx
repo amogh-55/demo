@@ -9,6 +9,7 @@ import {
   Lightbulb,
   MapPin,
   Phone,
+  Play,
   QrCode,
   ShieldCheck,
   ShowerHead,
@@ -21,8 +22,7 @@ import { getSettings } from "@/lib/settings";
 import { formatMinutes } from "@/lib/time";
 import { Button, formatCurrency } from "@/components/ui/primitives";
 import { GroundsShowcase } from "@/components/customer/grounds-showcase";
-import { SiteHeader, StickyBookBar } from "@/components/customer/site-chrome";
-import { TurfAssistant } from "@/components/customer/turf-assistant";
+import { ScrollToTop, SiteHeader } from "@/components/customer/site-chrome";
 import { whatsappUrl } from "@/lib/whatsapp";
 
 export const dynamic = "force-dynamic";
@@ -110,17 +110,15 @@ export default async function HomePage() {
                  Book Now
                 </Button>
               </Link>
-              {settings.whatsappNumber ? (
-                <a
-                  href={whatsappUrl(settings.whatsappNumber, `Hi ${settings.businessName}, I'd like to know about turf bookings.`)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Button size="lg" variant="secondary" className="w-full sm:w-auto">
-                    Chat on WhatsApp
-                  </Button>
-                </a>
-              ) : null}
+              {/* The photos are the thing that actually sells a ground, and they
+                  are already on this page — so this sends people to them rather
+                  than out to WhatsApp. */}
+              <a href="#gallery">
+                <Button size="lg" variant="secondary" className="w-full sm:w-auto">
+                  <Play className="h-5 w-5" aria-hidden="true" />
+                  Watch the turf
+                </Button>
+              </a>
             </div>
 
             {/* Two columns on a phone leaves ~110px per cell, so the padding and the
@@ -393,22 +391,7 @@ export default async function HomePage() {
         </div>
       </footer>
 
-      <StickyBookBar />
-      <TurfAssistant
-        facts={{
-          businessName: settings.businessName,
-          supportPhone: settings.supportPhone,
-          whatsappNumber: settings.whatsappNumber,
-          grounds: locations.map((l) => ({ name: l.name, address: l.address })),
-          openMin,
-          closeMin,
-          minPrice,
-          maxPrice,
-          holdMinutes,
-          bookingWindowDays,
-          upiId: settings.upiId,
-        }}
-      />
+      <ScrollToTop />
     </div>
   );
 }
