@@ -24,7 +24,6 @@ export default async function AdminDashboardPage({
   // showing zeroes as though the turf had no bookings.
   const activeId = locations.some((l) => l._id.toHexString() === requested) ? requested : "";
   const scope = activeId ? { locationId: new ObjectId(activeId) } : {};
-  const scopeName = locations.find((l) => l._id.toHexString() === activeId)?.name ?? null;
 
   const [byStatus, todayBookings, pendingPayments, blockedUnits, blockedDays, byLocation, recent, takings] =
     await Promise.all([
@@ -94,17 +93,21 @@ export default async function AdminDashboardPage({
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-ink-900">Dashboard</h1>
-          <p className="mt-0.5 text-sm text-ink-600">
-            {formatIstTimestamp(new Date())} · Asia/Kolkata
-            {scopeName ? <span className="font-medium text-pitch-700"> · {scopeName}</span> : null}
-          </p>
+          {/* The ground is not named here on purpose: the dropdown below is the
+              single place that says which one is shown, so the two can never
+              contradict each other while a switch is in flight. */}
+          <p className="mt-0.5 text-sm text-ink-600">{formatIstTimestamp(new Date())} · Asia/Kolkata</p>
         </div>
-        <LocationFilter
-          locations={locations.map((l) => ({ id: l._id.toHexString(), name: l.name }))}
-          value={activeId}
-        />
       </header>
 
+      {/* Everything below is scoped to the chosen ground, so the filter wraps it:
+          while a new ground is loading the figures are dimmed rather than sitting
+          there looking like they belong to the ground now named in the dropdown. */}
+      <LocationFilter
+        locations={locations.map((l) => ({ id: l._id.toHexString(), name: l.name }))}
+        value={activeId}
+      >
+      <div className="space-y-5">
       {/* Today's money and today's count, side by side — the two things worth a
           glance before the turf opens. */}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -226,6 +229,8 @@ export default async function AdminDashboardPage({
           )}
         </section>
       </div>
+      </div>
+      </LocationFilter>
     </div>
   );
 }
