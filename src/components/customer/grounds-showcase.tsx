@@ -2,11 +2,11 @@
 
 import * as React from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { MapPin, Navigation, Phone } from "lucide-react";
 import { locationPhotos } from "@/lib/photos";
-import { formatCompactRange } from "@/lib/time";
-import { Button, cn, formatCurrency } from "@/components/ui/primitives";
+import { FacilityPricing } from "@/components/customer/facility-pricing";
+import { GroundDialog } from "@/components/customer/ground-dialog";
+import { cn } from "@/components/ui/primitives";
 import type { PublicLocationTree } from "@/lib/catalog";
 
 /**
@@ -78,40 +78,7 @@ export function GroundsShowcase({ locations }: { locations: PublicLocationTree[]
 
           <div className="mt-4 space-y-4">
             {active.facilities.map((f) => (
-              <div key={f.id} className="rounded-xl border border-white/10 bg-ink-950 p-4">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                  <h4 className="font-bold text-white">{f.name}</h4>
-                  <span className="text-xs text-ink-400">
-                    {formatCompactRange(f.openMin, f.closeMin)}
-                    {f.resources.length > 1 ? ` · ${f.resources.length} courts` : ""}
-                  </span>
-                </div>
-
-                {/* The owner's own bands, read from the same configuration the
-                    booking engine charges from — so a rate change in the admin
-                    panel updates this table too. */}
-                <dl className="mt-3 space-y-1.5 text-sm">
-                  {f.kind === "OVERS"
-                    ? f.ballTypes.map((b) => (
-                        <div key={b.id} className="flex items-baseline justify-between gap-3">
-                          <dt className="text-ink-400">{b.name}</dt>
-                          <dd className="font-semibold text-lime-400">
-                            {formatCurrency(b.pricePerSlot)}
-                            <span className="text-ink-400"> / {f.oversPerSlot} overs</span>
-                          </dd>
-                        </div>
-                      ))
-                    : f.priceBands.map((band) => (
-                        <div key={band.fromMin} className="flex items-baseline justify-between gap-3">
-                          <dt className="text-ink-400">{formatCompactRange(band.fromMin, band.toMin)}</dt>
-                          <dd className="font-semibold text-lime-400">
-                            {formatCurrency(band.price)}
-                            <span className="text-ink-400">/hr</span>
-                          </dd>
-                        </div>
-                      ))}
-                </dl>
-              </div>
+              <FacilityPricing key={f.id} facility={f} />
             ))}
           </div>
 
@@ -143,9 +110,9 @@ export function GroundsShowcase({ locations }: { locations: PublicLocationTree[]
             ) : null}
           </div>
 
-          <Link href={`/book?location=${active.slug}`} className="mt-5 block">
-            <Button className="w-full">Book {active.name}</Button>
-          </Link>
+          <div className="mt-5">
+            <GroundDialog location={active} label={`Book ${active.name}`} />
+          </div>
         </div>
       </div>
     </div>

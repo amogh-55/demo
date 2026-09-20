@@ -125,3 +125,17 @@ export function oversLadder(oversPerSlot: number, slotMinutes: number, openMin: 
   for (let slots = 1; slots <= maxSlots; slots += 1) ladder.push(slots * oversPerSlot);
   return ladder;
 }
+
+/**
+ * Every clock hour a session touches, as minutes-of-day: a 90-minute run from
+ * 6:45 touches 6:00, 7:00 and 8:00.
+ *
+ * Used to decide which hours of the picker to open, so a session that runs past
+ * the hour it starts in is shown whole rather than cut off at the boundary.
+ */
+export function hoursTouched(startMin: number, endMin: number): number[] {
+  if (!Number.isFinite(startMin) || !Number.isFinite(endMin) || endMin <= startMin) return [];
+  const hours: number[] = [];
+  for (let m = Math.floor(startMin / 60) * 60; m < endMin; m += 60) hours.push(m);
+  return hours;
+}

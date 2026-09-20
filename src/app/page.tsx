@@ -21,6 +21,7 @@ import { getPublicCatalog } from "@/lib/catalog";
 import { getSettings } from "@/lib/settings";
 import { formatMinutes } from "@/lib/time";
 import { Button, formatCurrency } from "@/components/ui/primitives";
+import { GroundDialog } from "@/components/customer/ground-dialog";
 import { GroundsShowcase } from "@/components/customer/grounds-showcase";
 import { ScrollToTop, SiteHeader } from "@/components/customer/site-chrome";
 import { whatsappUrl } from "@/lib/whatsapp";
@@ -194,9 +195,13 @@ export default async function HomePage() {
                         </li>
                       ))}
                     </ul>
-                    <Link href={`/book?location=${location.slug}`} className="mt-5 block">
-                      <Button className="w-full">Book this ground</Button>
-                    </Link>
+                    {/* Opens the services and prices first: the question a
+                        customer has at this point is "what do they have and what
+                        does it cost", and the answer is one tap away rather than
+                        a page load away. */}
+                    <div className="mt-5">
+                      <GroundDialog location={location} />
+                    </div>
                   </div>
                 </li>
               ))}

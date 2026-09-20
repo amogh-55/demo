@@ -3,11 +3,11 @@
 import * as React from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Check, Clock, Copy, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Clock, Copy, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
-import { runIsFree } from "@/lib/booking/schedule";
+import { hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto } from "@/lib/photos";
-import { formatBusinessDate, formatCompactRange, formatRange, minutesToDuration } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
 
@@ -395,6 +395,46 @@ export function BookingFlow({
     () => units.some((u) => u.status === "AVAILABLE" && fitsAt(u.startMin)),
     [units, fitsAt],
   );
+
+  /**
+   * Bowling runs in quarter-hours, so a day is sixty-eight buttons — a wall on a
+   * phone. Grouped by the hour the customer picks the hour first and then the
+   * exact start, which is how they think about it anyway ("about seven-ish").
+   */
+  const hourGroups = React.useMemo(() => {
+    const groups = new Map<number, AvailabilityUnit[]>();
+    for (const unit of units) {
+      const hourMin = Math.floor(unit.startMin / 60) * 60;
+      groups.set(hourMin, [...(groups.get(hourMin) ?? []), unit]);
+    }
+    return [...groups.entries()].map(([hourMin, own]) => ({ hourMin, units: own }));
+  }, [units]);
+
+  const firstFittingHour = React.useMemo(
+    () => hourGroups.find((g) => g.units.some((u) => u.status === "AVAILABLE" && fitsAt(u.startMin)))?.hourMin ?? null,
+    [hourGroups, fitsAt],
+  );
+
+  // "auto" follows the first hour with room in it; "none" is the customer having
+  // closed that hour themselves, which a background refresh must not undo.
+  const [openHour, setOpenHour] = React.useState<number | "auto" | "none">("auto");
+  React.useEffect(() => {
+    setOpenHour("auto");
+  }, [resourceId, date, overs]);
+
+  const activeHour = openHour === "auto" ? firstFittingHour : openHour === "none" ? null : openHour;
+
+  /**
+   * A long session runs past the hour it starts in — 60 overs from 6:45 covers
+   * 6:45 to 8:15 — so every hour it touches is opened, and the customer can see
+   * the whole run highlighted instead of a single lit square and two hidden ones.
+   */
+  const expandedHours = React.useMemo(() => {
+    const open = new Set<number>();
+    if (activeHour !== null) open.add(activeHour);
+    if (selection) for (const hour of hoursTouched(selection.startMin, selection.endMin)) open.add(hour);
+    return open;
+  }, [activeHour, selection]);
 
   const selectedUnits = selection
     ? units.filter((u) => u.startMin >= selection.startMin && u.endMin <= selection.endMin)
@@ -913,10 +953,9 @@ export function BookingFlow({
                 <div className="mt-5">
                   <p className="field-label">Pick a start time</p>
                   <p className="mt-0.5 text-sm text-ink-400">
-                    Each slot is {availability.oversPerSlot} overs ({minutesToDuration(availability.slotMinutes)}).
-                    {sessionSlots > 1
-                      ? ` ${overs} overs takes ${sessionSlots} slots in a row — tap the first one.`
-                      : " Tap the one you want."}
+                    Pick the hour, then the exact start. Each slot is {availability.oversPerSlot} overs (
+                    {minutesToDuration(availability.slotMinutes)})
+                    {sessionSlots > 1 ? `, and ${overs} overs runs on for ${minutesToDuration(sessionMinutes)}` : ""}.
                   </p>
 
                   {!anyStartFits ? (
@@ -925,51 +964,93 @@ export function BookingFlow({
                       hint="Try fewer overs, another date or another ground."
                     />
                   ) : (
-                    <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {units.map((unit) => {
-                        const inSelection =
-                          selection && unit.startMin >= selection.startMin && unit.startMin < selection.endMin;
-                        const free = unit.status === "AVAILABLE";
-                        const fits = free && fitsAt(unit.startMin);
-                        const runsTo = unit.startMin + sessionMinutes;
+                    <div className="mt-3 space-y-2">
+                      {hourGroups.map((group) => {
+                        const expanded = expandedHours.has(group.hourMin);
+                        const freeStartCount = group.units.filter((u) => u.status === "AVAILABLE" && fitsAt(u.startMin)).length;
+                        const holdsSelection = selection
+                          ? group.units.some((u) => u.startMin >= selection.startMin && u.startMin < selection.endMin)
+                          : false;
                         return (
-                          <li key={unit.startMin}>
+                          <div
+                            key={group.hourMin}
+                            className={cn(
+                              "overflow-hidden rounded-lg border",
+                              holdsSelection ? "border-lime-400/60 bg-lime-400/[0.06]" : "border-white/10",
+                            )}
+                          >
                             <button
                               type="button"
-                              disabled={!fits}
-                              aria-pressed={Boolean(inSelection)}
-                              onClick={() =>
-                                setSelection(
-                                  inSelection || sessionMinutes <= 0
-                                    ? null
-                                    : { startMin: unit.startMin, endMin: runsTo },
-                                )
-                              }
-                              className={cn(
-                                "w-full rounded-lg border px-3 py-3 text-left transition-colors",
-                                inSelection
-                                  ? "border-lime-400 bg-lime-400 text-ink-950"
-                                  : fits
-                                    ? "border-white/15 bg-white/[0.06] text-white hover:border-lime-400/60 hover:bg-white/10"
-                                    : "cursor-not-allowed border-white/5 bg-white/[0.02] text-ink-500",
-                              )}
+                              aria-expanded={expanded}
+                              onClick={() => setOpenHour(expanded && !holdsSelection ? "none" : group.hourMin)}
+                              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5"
                             >
-                              <span className="block whitespace-nowrap text-base font-semibold">
-                                {formatCompactRange(unit.startMin, unit.endMin)}
-                              </span>
-                              <span className={cn("block text-sm", inSelection ? "text-ink-950/70" : "text-ink-300")}>
-                                {fits || inSelection
-                                  ? `${availability.oversPerSlot} overs · ${formatCurrency(ball?.pricePerSlot)}`
-                                  : free
-                                    // Free itself, but a later quarter it needs is not.
-                                    ? "Not enough time"
-                                    : statusLabel(unit.status)}
+                              <span className="text-base font-semibold text-white">{formatMinutes(group.hourMin)}</span>
+                              <span className="flex items-center gap-2 text-sm">
+                                <span className={freeStartCount > 0 ? "text-ink-300" : "text-ink-500"}>
+                                  {freeStartCount > 0
+                                    ? `${freeStartCount} start${freeStartCount === 1 ? "" : "s"} free`
+                                    : "Nothing free"}
+                                </span>
+                                <ChevronDown
+                                  className={cn("h-4 w-4 shrink-0 text-ink-400 transition-transform", expanded ? "rotate-180" : "")}
+                                  aria-hidden="true"
+                                />
                               </span>
                             </button>
-                          </li>
+
+                            {expanded ? (
+                              <ul className="grid grid-cols-2 gap-2 border-t border-white/10 p-3">
+                                {group.units.map((unit) => {
+                                  const inSelection =
+                                    selection && unit.startMin >= selection.startMin && unit.startMin < selection.endMin;
+                                  const free = unit.status === "AVAILABLE";
+                                  const fits = free && fitsAt(unit.startMin);
+                                  const runsTo = unit.startMin + sessionMinutes;
+                                  return (
+                                    <li key={unit.startMin}>
+                                      <button
+                                        type="button"
+                                        disabled={!fits && !inSelection}
+                                        aria-pressed={Boolean(inSelection)}
+                                        onClick={() => {
+                                          const next =
+                                            inSelection || sessionMinutes <= 0
+                                              ? null
+                                              : { startMin: unit.startMin, endMin: runsTo };
+                                          setSelection(next);
+                                          if (next) setOpenHour(group.hourMin);
+                                        }}
+                                        className={cn(
+                                          "w-full rounded-lg border px-3 py-3 text-left transition-colors",
+                                          inSelection
+                                            ? "border-lime-400 bg-lime-400 text-ink-950"
+                                            : fits
+                                              ? "border-white/15 bg-white/[0.06] text-white hover:border-lime-400/60 hover:bg-white/10"
+                                              : "cursor-not-allowed border-white/5 bg-white/[0.02] text-ink-500",
+                                        )}
+                                      >
+                                        <span className="block whitespace-nowrap text-[15px] font-semibold">
+                                          {formatCompactRange(unit.startMin, unit.endMin)}
+                                        </span>
+                                        <span className={cn("block text-sm", inSelection ? "text-ink-950/70" : "text-ink-300")}>
+                                          {fits || inSelection
+                                            ? `${availability.oversPerSlot} overs · ${formatCurrency(ball?.pricePerSlot)}`
+                                            : free
+                                              // Free itself, but a later quarter it needs is not.
+                                              ? "Not enough time"
+                                              : statusLabel(unit.status)}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            ) : null}
+                          </div>
                         );
                       })}
-                    </ul>
+                    </div>
                   )}
                 </div>
               </>

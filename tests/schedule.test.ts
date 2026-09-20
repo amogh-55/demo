@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   applyBallPricing,
   buildDayTemplate,
+  hoursTouched,
   minutesForOvers,
   oversLadder,
   priceForStart,
@@ -215,5 +216,23 @@ describe("whether a session fits at a start time", () => {
   it("refuses a run that would continue past the end of the day", () => {
     assert.equal(runIsFree(15, free(1365), 1365, 1), true);
     assert.equal(runIsFree(15, free(1365), 1365, 2), false);
+  });
+});
+
+describe("hours a session touches", () => {
+  it("is just its own hour when it fits inside one", () => {
+    assert.deepEqual(hoursTouched(6 * 60, 6 * 60 + 30), [6 * 60]);
+    assert.deepEqual(hoursTouched(6 * 60 + 45, 7 * 60), [6 * 60]);
+  });
+
+  /** 60 overs from 6:45 runs to 8:15, so the picker must open 6, 7 and 8. */
+  it("covers every hour a long session runs into", () => {
+    assert.deepEqual(hoursTouched(6 * 60 + 45, 8 * 60 + 15), [6 * 60, 7 * 60, 8 * 60]);
+    assert.deepEqual(hoursTouched(6 * 60, 8 * 60), [6 * 60, 7 * 60]);
+  });
+
+  it("returns nothing for an empty or backwards range", () => {
+    assert.deepEqual(hoursTouched(600, 600), []);
+    assert.deepEqual(hoursTouched(660, 600), []);
   });
 });
