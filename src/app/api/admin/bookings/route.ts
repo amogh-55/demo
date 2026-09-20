@@ -68,6 +68,7 @@ export async function GET(request: Request) {
           status: p.status,
           note: p.note,
           hasScreenshot: Boolean(p.screenshotKey),
+          screenshotExpired: Boolean(p.screenshotExpiredAt),
         })),
         hasScreenshot: Boolean(b.paymentScreenshotKey),
         rejectionReason: b.rejectionReason,

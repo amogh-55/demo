@@ -37,7 +37,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (attemptId && !attempt) throw appError("NOT_FOUND", "That payment screenshot is not available.");
 
     if (attempt && !attempt.screenshotKey) {
-      throw appError("NOT_FOUND", "That payment was recorded by staff, so there is no screenshot.");
+      throw appError(
+        "NOT_FOUND",
+        attempt.screenshotExpiredAt
+          ? "This screenshot was deleted a week after the match. The payment record is still here."
+          : "That payment was recorded by staff, so there is no screenshot.",
+      );
     }
     const key = attempt?.screenshotKey ?? booking.paymentScreenshotKey;
     if (!key) throw appError("NOT_FOUND", "No payment screenshot was uploaded.");

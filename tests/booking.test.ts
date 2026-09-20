@@ -79,6 +79,8 @@ async function acceptPayment(
 }
 
 const SCREENSHOT = "payment-screenshots/test/shot.jpg";
+/** Matches the real key format, so the storage layer accepts it for deletion. */
+const REAL_SCREENSHOT = "payment-screenshots/2026-01-01/00000000-0000-4000-8000-000000000000.jpg";
 
 describe("booking engine", { skip: !HAS_DB }, () => {
   before(async () => {
@@ -623,6 +625,83 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       const stored = await collections.bookings(db).findOne({ _id: booking._id });
       assert.ok(stored!.timeline.some((t) => t.event === "WHATSAPP_CONFIRM_OPENED"));
       assert.ok(!stored!.timeline.some((t) => t.event.includes("SENT")));
+    });
+  });
+
+  /* ── Screenshot retention ──────────────────────────────────────────── */
+
+  describe("screenshot retention", () => {
+    /** A booking on `date` that has been paid for, with a screenshot on file. */
+    async function paidBooking(date: string) {
+      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Retention Test",
+        customerPhone: "9876500011",
+        paymentScreenshotKey: REAL_SCREENSHOT,
+      });
+      await acceptPayment(booking);
+      // Backdate the play date past the cutoff without going through the booking
+      // flow, which refuses to create anything in the past.
+      return booking;
+    }
+
+    it("keeps a screenshot while the booking is recent", async () => {
+      const booking = await paidBooking(futureDate(1));
+      const result = await service.purgeExpiredScreenshots();
+      assert.equal(result.bookings, 0, "a booking that has not been played must keep its screenshot");
+
+      const stored = await collections.bookings(db).findOne({ _id: booking._id });
+      assert.equal(stored!.payments[0]!.screenshotKey, REAL_SCREENSHOT);
+    });
+
+    it("deletes the image after the retention window but keeps the money record", async () => {
+      const booking = await paidBooking(futureDate(1));
+      await collections.bookings(db).updateOne({ _id: booking._id }, { $set: { date: pastDate(30) } });
+
+      const result = await service.purgeExpiredScreenshots();
+      assert.equal(result.bookings, 1);
+      assert.equal(result.failed, 0);
+
+      const stored = await collections.bookings(db).findOne({ _id: booking._id });
+      const attempt = stored!.payments[0]!;
+      assert.equal(attempt.screenshotKey, null, "the image reference must be cleared");
+      assert.ok(attempt.screenshotExpiredAt, "and marked as expired, not as never-existing");
+      assert.equal(stored!.paymentScreenshotKey, null);
+
+      // The whole point: the money survives the image.
+      assert.equal(attempt.amount, booking.amount);
+      assert.equal(attempt.status, "ACCEPTED");
+      assert.equal(attempt.reviewedBy, ADMIN.username);
+      assert.equal(stored!.amountPaid, booking.amount);
+      assert.equal(stored!.status, booking.status);
+      assert.ok(stored!.timeline.length > 0, "the audit timeline must be untouched");
+    });
+
+    it("is safe to run twice", async () => {
+      const booking = await paidBooking(futureDate(1));
+      await collections.bookings(db).updateOne({ _id: booking._id }, { $set: { date: pastDate(30) } });
+
+      assert.equal((await service.purgeExpiredScreenshots()).bookings, 1);
+      // The second pass must find nothing, not fail on an already-deleted file.
+      assert.equal((await service.purgeExpiredScreenshots()).bookings, 0);
+    });
+
+    it("leaves a staff-recorded payment alone — there is no image to delete", async () => {
+      const date = futureDate(1);
+      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1140, endMin: 1200 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Cash Payer",
+        customerPhone: "9876500012",
+        paymentScreenshotKey: SCREENSHOT,
+      });
+      await collections.bookings(db).updateOne({ _id: booking._id }, { $set: { date: pastDate(30) } });
+
+      await service.purgeExpiredScreenshots();
+      const stored = await collections.bookings(db).findOne({ _id: booking._id });
+      assert.equal(stored!.payments[0]!.screenshotKey, null);
+      assert.ok(stored!.payments[0]!.screenshotExpiredAt);
     });
   });
 

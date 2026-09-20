@@ -15,6 +15,8 @@ export interface PaymentAttemptView {
   note: string | null;
   /** False for a payment the admin recorded by hand — there is no image to open. */
   hasScreenshot?: boolean;
+  /** The image was deleted by the retention job; the payment record itself remains. */
+  screenshotExpired?: boolean;
 }
 
 export interface PaymentReviewBooking {
@@ -115,14 +117,25 @@ export function PaymentReviewDialog({
             <ul className="mt-3 space-y-1 text-xs">
               {booking.payments.map((p, i) => (
                 <li key={p.id} className="flex items-center justify-between gap-2 rounded bg-ink-50 px-2 py-1">
-                  <a
-                    href={`/api/admin/bookings/${booking.id}/screenshot?attempt=${encodeURIComponent(p.id)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex h-11 min-w-0 items-center truncate text-ink-600 underline decoration-dotted underline-offset-2 hover:text-pitch-700"
-                  >
-                    #{i + 1} · {formatIstTimestamp(p.uploadedAt)}
-                  </a>
+                  {/* Only a link when there is still a file to open. A dead link that
+                      404s reads as a broken system; naming the reason does not. */}
+                  {p.hasScreenshot === false ? (
+                    <span className="inline-flex h-11 min-w-0 items-center truncate text-ink-500">
+                      #{i + 1} · {formatIstTimestamp(p.uploadedAt)}
+                      <span className="ml-1.5 shrink-0 text-ink-400">
+                        {p.screenshotExpired ? "· image deleted after 7 days" : "· recorded by staff"}
+                      </span>
+                    </span>
+                  ) : (
+                    <a
+                      href={`/api/admin/bookings/${booking.id}/screenshot?attempt=${encodeURIComponent(p.id)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-11 min-w-0 items-center truncate text-ink-600 underline decoration-dotted underline-offset-2 hover:text-pitch-700"
+                    >
+                      #{i + 1} · {formatIstTimestamp(p.uploadedAt)}
+                    </a>
+                  )}
                   <span
                     className={cn(
                       "shrink-0 font-medium",

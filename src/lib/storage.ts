@@ -2,7 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { appError } from "./errors";
 import { SCREENSHOT_KEY_PATTERN } from "./validation";
@@ -134,6 +134,29 @@ export async function storePaymentScreenshot(file: File): Promise<{ key: string;
   }
 
   return { key, mime: sniffed, size: bytes.byteLength };
+}
+
+/**
+ * Removes one stored screenshot. Used by the retention job once a booking is long
+ * past: the payment record (amount, who approved it, when) is kept forever, only
+ * the image goes.
+ *
+ * Deleting something already gone is not an error — the job must be safe to run
+ * twice.
+ */
+export async function deletePaymentScreenshot(key: string): Promise<void> {
+  if (!KEY_PATTERN.test(key)) throw appError("NOT_FOUND", "That payment screenshot is not available.");
+
+  if (storageDriver() === "local") {
+    try {
+      await fs.unlink(localPath(key));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    return;
+  }
+
+  await client().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
 }
 
 export type ScreenshotAccess =

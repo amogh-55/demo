@@ -4,6 +4,7 @@ import { ObjectId, type ClientSession, type Db } from "mongodb";
 import { collections, getDb, getMongoClient, isDuplicateKeyError } from "@/lib/db";
 import { appError, AppError } from "@/lib/errors";
 import { log } from "@/lib/log";
+import { deletePaymentScreenshot } from "@/lib/storage";
 import { daysFromToday, istDateString, istInstant, isValidBusinessDate } from "@/lib/time";
 import type {
   BookingDoc,
@@ -1252,4 +1253,110 @@ export async function unblockDay(locationId: ObjectId, date: string): Promise<bo
   const db = await getDb();
   const result = await collections.dayBlocks(db).deleteOne({ locationId, date });
   return result.deletedCount > 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Screenshot retention
+ * ────────────────────────────────────────────────────────────────────── */
+
+/**
+ * How long a payment screenshot is kept after the slot has been played.
+ *
+ * Long enough to settle a dispute while the match is fresh, short enough that
+ * storage never becomes a problem: at 20 bookings a day this keeps roughly 140
+ * images alive, a few dozen megabytes.
+ */
+export const SCREENSHOT_RETAIN_DAYS = 7;
+
+/**
+ * Deletes screenshots for bookings played more than {@link SCREENSHOT_RETAIN_DAYS}
+ * ago, keeping every payment record intact.
+ *
+ * What is removed is only the image file. The attempt keeps its amount, its
+ * verdict, who approved it and when, so the money trail and the audit log are
+ * untouched and a booking can still be reconciled years later.
+ *
+ * Safe to run repeatedly: a booking is only marked once its files are actually
+ * gone, and deleting an object that has already been deleted is not an error.
+ */
+export async function purgeExpiredScreenshots(input?: {
+  retainDays?: number;
+  now?: Date;
+}): Promise<{ bookings: number; deleted: number; failed: number }> {
+  const now = input?.now ?? new Date();
+  const retainDays = input?.retainDays ?? SCREENSHOT_RETAIN_DAYS;
+  // Booking dates are plain IST day strings, so the cutoff is one too and the
+  // comparison is a lexical one Mongo can answer from the index.
+  const cutoff = istDateString(new Date(now.getTime() - retainDays * 86_400_000));
+
+  const db = await getDb();
+  const stale = await collections
+    .bookings(db)
+    .find({ date: { $lt: cutoff }, "payments.screenshotKey": { $ne: null } })
+    .toArray();
+
+  let deleted = 0;
+  let failed = 0;
+  let touched = 0;
+
+  for (const booking of stale) {
+    const keys = [
+      ...new Set(
+        [...(booking.payments ?? []).map((p) => p.screenshotKey), booking.paymentScreenshotKey].filter(
+          (k): k is string => Boolean(k),
+        ),
+      ),
+    ];
+
+    let allGone = true;
+    for (const key of keys) {
+      try {
+        await deletePaymentScreenshot(key);
+        deleted += 1;
+      } catch (err) {
+        // A key that cannot name a real object — legacy or malformed data — has
+        // nothing behind it to delete. Retrying it every night forever would log
+        // an error a day and keep the booking pinned in the queue, so clear it.
+        if (err instanceof AppError && err.code === "NOT_FOUND") continue;
+
+        // Anything else is a real failure: leave the booking untouched so the
+        // next run tries again, rather than marking an image expired while the
+        // file is still sitting in the bucket.
+        allGone = false;
+        log.error("screenshot_purge_failed", { err, reference: booking.reference, key });
+      }
+    }
+    if (!allGone) {
+      failed += 1;
+      continue;
+    }
+
+    await collections.bookings(db).updateOne({ _id: booking._id }, [
+      {
+        $set: {
+          payments: {
+            $map: {
+              input: { $ifNull: ["$payments", []] },
+              as: "p",
+              in: {
+                $cond: [
+                  { $ne: ["$$p.screenshotKey", null] },
+                  { $mergeObjects: ["$$p", { screenshotKey: null, screenshotExpiredAt: now }] },
+                  "$$p",
+                ],
+              },
+            },
+          },
+          paymentScreenshotKey: null,
+          updatedAt: now,
+        },
+      },
+    ]);
+    touched += 1;
+  }
+
+  if (touched || failed) {
+    log.info("screenshots_purged", { bookings: touched, deleted, failed, cutoff, retainDays });
+  }
+  return { bookings: touched, deleted, failed };
 }

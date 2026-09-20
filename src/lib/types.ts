@@ -29,6 +29,13 @@ export interface PaymentAttempt {
   reviewedBy: string | null;
   reviewedAt: Date | null;
   note: string | null;
+  /**
+   * Set when the retention job removed the image. The attempt itself — amount,
+   * verdict, who approved it — is kept forever; only the file is gone, and this
+   * is what tells the admin screen the difference between "deleted after 7 days"
+   * and "no screenshot was ever sent".
+   */
+  screenshotExpiredAt?: Date | null;
 }
 
 export interface LocationDoc {
