@@ -19,6 +19,15 @@ const BASE = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 // because the name validator (rightly) rejects bracketed prefixes.
 const DEMO_NAME = "Demo Ravi Kumar";
 const DEMO_PHONE = "9000000001";
+/**
+ * A well-formed key pointing at nothing.
+ *
+ * Booking submission checks the SHAPE of a screenshot key so a browser cannot
+ * invent one, and this has to satisfy that check. No file is uploaded, so the
+ * image simply will not open in the admin screen — which is the honest outcome
+ * for a demo booking nobody paid for.
+ */
+const DEMO_SCREENSHOT_KEY = "payment-screenshots/2026-01-01/00000000-0000-4000-8000-000000000de0.jpg";
 
 const bold = (s: string) => `[1m${s}[0m`;
 const green = (s: string) => `[32m${s}[0m`;
@@ -42,11 +51,11 @@ interface HoldAttempt {
   message?: string;
 }
 
-async function attemptHold(label: string, locationId: string, date: string, startMin: number, endMin: number) {
+async function attemptHold(label: string, resourceId: string, date: string, startMin: number, endMin: number) {
   const res = await fetch(`${BASE}/api/holds`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ locationId, date, startMin, endMin }),
+    body: JSON.stringify({ resourceId, date, startMin, endMin }),
   });
   const body = await res.json();
   const cookie = res.headers.getSetCookie().find((c) => c.startsWith("turf_hold="))?.split(";")[0] ?? null;
@@ -114,11 +123,49 @@ async function main() {
   if (!locationsRes?.ok) {
     throw new Error(`Cannot reach ${BASE}. Start the dev server first with \`npm run dev\`.`);
   }
-  const { locations } = (await locationsRes.json()) as { locations: Array<{ id: string; name: string }> };
-  if (locations.length === 0) throw new Error("No active locations. Run `npm run seed` first.");
+  const { locations } = (await locationsRes.json()) as {
+    locations: Array<{
+      id: string;
+      name: string;
+      facilities: Array<{
+        id: string;
+        name: string;
+        kind: "HOURLY" | "OVERS";
+        resources: Array<{ id: string; name: string }>;
+      }>;
+    }>;
+  };
+  if (locations.length === 0) throw new Error("Nothing bookable. Run `npm run seed` first.");
 
-  const ground = locations[0]!;
-  const other = locations[1];
+  // Everything below races one RESOURCE against itself, so the demo needs the
+  // leaf, not the ground: a ground with two courts is two independent things.
+  const hourly = locations
+    .flatMap((l) => l.facilities.map((f) => ({ location: l, facility: f })))
+    .filter((x) => x.facility.kind === "HOURLY" && x.facility.resources.length > 0);
+  if (hourly.length === 0) throw new Error("No hourly facility to demonstrate with. Run `npm run seed` first.");
+
+  const first = hourly[0]!;
+  const ground = { id: first.facility.resources[0]!.id, name: `${first.facility.name} · ${first.location.name}` };
+
+  /**
+   * Something at a DIFFERENT resource, to show they do not block each other.
+   * A second court under the same facility is the sharpest version of that,
+   * so it is preferred over a different ground.
+   */
+  const sibling = first.facility.resources[1];
+  const elsewhereEntry = hourly.find((x) => x.facility.id !== first.facility.id);
+  const other = sibling
+    ? { id: sibling.id, name: `${first.facility.name} · ${sibling.name}` }
+    : elsewhereEntry
+      ? {
+          id: elsewhereEntry.facility.resources[0]!.id,
+          name: `${elsewhereEntry.facility.name} · ${elsewhereEntry.location.name}`,
+        }
+      : undefined;
+
+  const bowling = locations
+    .flatMap((l) => l.facilities.map((f) => ({ location: l, facility: f })))
+    .find((x) => x.facility.kind === "OVERS" && x.facility.resources.length > 0);
   // Three days out: safely inside the booking window and never already started.
   const date = new Date(Date.now() + 330 * 60_000 + 3 * 86_400_000).toISOString().slice(0, 10);
 
@@ -147,12 +194,40 @@ async function main() {
   report([adjacent]);
   console.log(dim("  → intervals are half-open [start, end), so adjacent bookings are allowed\n"));
 
-  /* 4 ─ Same hour, different ground. */
+  /* 4 ─ Same hour, different bookable resource. */
   if (other) {
     console.log(bold(`4. Customer G wants the same ${time(1020)}–${time(1140)} at ${other.name}`));
     const elsewhere = await attemptHold("Customer G", other.id, date, 17 * 60, 19 * 60);
     report([elsewhere]);
-    console.log(dim("  → locationId is part of the unique key, so grounds never block each other\n"));
+    console.log(dim("  → the unique key is (resource, date, start), so separate courts never block each other\n"));
+  }
+
+  /* 4b ─ Overs bookings lock quarter-hours, and overlap at that granularity. */
+  if (bowling) {
+    const machine = bowling.facility.resources[0]!;
+    console.log(bold(`4b. Two bowling sessions at ${bowling.facility.name} · ${bowling.location.name}`));
+
+    const book = (label: string, startMin: number, overs: number, ballTypeId: string) =>
+      fetch(`${BASE}/api/holds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resourceId: machine.id, date, startMin, overs, ballTypeId }),
+      }).then(async (res) => {
+        const body = await res.json();
+        const cookie = res.headers.getSetCookie().find((c) => c.startsWith("turf_hold="))?.split(";")[0] ?? null;
+        if (cookie && res.status === 200) createdHolds.push(cookie);
+        return { label, status: res.status, cookie, amount: body?.amount, message: body?.error?.message };
+      });
+
+    // 6:00 + 20 overs is 6:00–6:30; 6:15 + 20 overs is 6:15–6:45. They share
+    // 6:15–6:30, so exactly one can win.
+    report(await Promise.all([book("Customer H (20 overs from 6:00)", 18 * 60, 20, "synthetic"), book("Customer I (20 overs from 6:15)", 18 * 60 + 15, 20, "leather")]));
+    console.log(dim("  → overs become 15-minute units, and the overlap is caught at that granularity\n"));
+
+    console.log(bold("4c. Customer J asks for more overs than are on sale"));
+    const tooMany = await book("Customer J (100 overs)", 20 * 60, 100, "synthetic");
+    report([tooMany]);
+    console.log(dim("  → the ceiling is the largest configured option, refused server-side\n"));
   }
 
   /* 5 ─ Turn the winning hold into a real pending booking. */
@@ -163,7 +238,7 @@ async function main() {
     body: JSON.stringify({
       customerName: DEMO_NAME,
       customerPhone: DEMO_PHONE,
-      paymentScreenshotKey: "demo/no-screenshot-storage-configured.jpg",
+      paymentScreenshotKey: DEMO_SCREENSHOT_KEY,
       amount: 1, // deliberately wrong: the server must ignore it
     }),
   });
@@ -180,7 +255,7 @@ async function main() {
     body: JSON.stringify({
       customerName: DEMO_NAME,
       customerPhone: DEMO_PHONE,
-      paymentScreenshotKey: "demo/no-screenshot-storage-configured.jpg",
+      paymentScreenshotKey: DEMO_SCREENSHOT_KEY,
     }),
   });
   const retryBody = await retry.json();
@@ -193,7 +268,7 @@ async function main() {
   await releaseAll();
 
   /* 7 ─ What the next customer now sees. */
-  const avail = await (await fetch(`${BASE}/api/availability?locationId=${ground.id}&date=${date}`)).json();
+  const avail = await (await fetch(`${BASE}/api/availability?resourceId=${ground.id}&date=${date}`)).json();
   console.log(`\n${bold("What the next customer sees")} — ${ground.name}, ${date}`);
   for (const u of avail.units.filter((x: { startMin: number }) => x.startMin >= 16 * 60 && x.startMin <= 21 * 60)) {
     const mark = u.status === "AVAILABLE" ? green("available") : u.status === "PENDING" ? red("taken (awaiting verification)") : dim(u.status.toLowerCase());

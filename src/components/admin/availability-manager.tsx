@@ -18,10 +18,26 @@ interface DayUnit {
 
 interface DayResponse {
   location: { id: string; name: string; active: boolean };
+  facility: { id: string; name: string; kind: string; active: boolean };
+  resource: { id: string; name: string; active: boolean };
   date: string;
   dayBlock: { reason: string; blockedBy: string } | null;
   units: DayUnit[];
 }
+
+export interface AdminFacility {
+  id: string;
+  locationId: string;
+  name: string;
+  resources: Array<{ id: string; name: string }>;
+}
+
+/**
+ * How wide a block reaches. Closing one court is routine; closing a whole ground
+ * for a festival is the case the owner actually asked for, and doing that court
+ * by court is where a court gets missed.
+ */
+type BlockScope = "RESOURCE" | "FACILITY" | "LOCATION";
 
 interface Conflict {
   startMin: number;
@@ -41,13 +57,23 @@ const BLOCK_REASONS = ["Tournament", "Maintenance", "Private event", "Weather"];
 
 export function AvailabilityManager({
   locations,
+  facilities,
   today,
 }: {
   locations: Array<{ id: string; name: string }>;
+  facilities: AdminFacility[];
   /** Today in Asia/Kolkata, from the server — never the admin's device clock. */
   today: string;
 }) {
   const [locationId, setLocationId] = React.useState(locations[0]?.id ?? "");
+  const facilitiesHere = React.useMemo(
+    () => facilities.filter((f) => f.locationId === locationId),
+    [facilities, locationId],
+  );
+  const [facilityId, setFacilityId] = React.useState(facilitiesHere[0]?.id ?? "");
+  const facility = facilitiesHere.find((f) => f.id === facilityId);
+  const [resourceId, setResourceId] = React.useState(facility?.resources[0]?.id ?? "");
+
   const [date, setDate] = React.useState(today);
   const [day, setDay] = React.useState<DayResponse | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -56,24 +82,38 @@ export function AvailabilityManager({
 
   const [selected, setSelected] = React.useState<number[]>([]);
   const [dialog, setDialog] = React.useState<null | "BLOCK_SLOTS" | "BLOCK_DAY">(null);
+  const [dayScope, setDayScope] = React.useState<BlockScope>("RESOURCE");
   const [busy, setBusy] = React.useState(false);
   const [conflicts, setConflicts] = React.useState<Conflict[]>([]);
   const [pendingReason, setPendingReason] = React.useState("");
 
+  // Changing ground or facility must not leave the screen pointing at something
+  // underneath a different one — it would load a court the admin cannot see.
+  React.useEffect(() => {
+    if (facilitiesHere.some((f) => f.id === facilityId)) return;
+    setFacilityId(facilitiesHere[0]?.id ?? "");
+  }, [facilitiesHere, facilityId]);
+
+  React.useEffect(() => {
+    if (!facility) return;
+    if (facility.resources.some((r) => r.id === resourceId)) return;
+    setResourceId(facility.resources[0]?.id ?? "");
+  }, [facility, resourceId]);
+
   const load = React.useCallback(async () => {
-    if (!locationId || !date) return;
+    if (!resourceId || !date) return;
     setLoading(true);
     setError(null);
     setSelected([]);
     try {
-      setDay(await api<DayResponse>(`/api/admin/day?locationId=${locationId}&date=${date}`));
+      setDay(await api<DayResponse>(`/api/admin/day?resourceId=${resourceId}&date=${date}`));
     } catch (err) {
       setDay(null);
       setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [locationId, date]);
+  }, [resourceId, date]);
 
   React.useEffect(() => {
     void load();
@@ -115,14 +155,26 @@ export function AvailabilityManager({
     });
   }
 
+  /** Exactly one id — the server expands a facility or ground into its courts. */
+  const target = (scope: BlockScope) =>
+    scope === "LOCATION" ? { locationId } : scope === "FACILITY" ? { facilityId } : { resourceId };
+
   async function submitBlock(scope: "SLOTS" | "DAY", reason: string, force: boolean) {
     setBusy(true);
     setError(null);
     try {
       const body =
         scope === "DAY"
-          ? { scope: "DAY", locationId, date, reason, force }
-          : { scope: "SLOTS", locationId, date, startMin: selectedRange!.startMin, endMin: selectedRange!.endMin, reason, force };
+          ? { scope: "DAY", ...target(dayScope), date, reason, force }
+          : {
+              scope: "SLOTS",
+              ...target("RESOURCE"),
+              date,
+              startMin: selectedRange!.startMin,
+              endMin: selectedRange!.endMin,
+              reason,
+              force,
+            };
 
       const result = await api<BlockResponse>("/api/admin/blocks", { method: "POST", body: JSON.stringify(body) });
 
@@ -151,8 +203,14 @@ export function AvailabilityManager({
     try {
       const body =
         scope === "DAY"
-          ? { scope: "DAY", locationId, date }
-          : { scope: "SLOTS", locationId, date, startMin: selectedRange!.startMin, endMin: selectedRange!.endMin };
+          ? { scope: "DAY", ...target("RESOURCE"), date }
+          : {
+              scope: "SLOTS",
+              ...target("RESOURCE"),
+              date,
+              startMin: selectedRange!.startMin,
+              endMin: selectedRange!.endMin,
+            };
       await api("/api/admin/blocks", { method: "DELETE", body: JSON.stringify(body) });
       setNotice(scope === "DAY" ? "Day re-opened." : "Slots re-opened.");
       await load();
@@ -165,7 +223,7 @@ export function AvailabilityManager({
 
   return (
     <div className="space-y-4">
-      <section className="card" aria-label="Choose location and date">
+      <section className="card" aria-label="Choose what to manage">
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="field-label" htmlFor="avail-location">
@@ -179,6 +237,47 @@ export function AvailabilityManager({
               ))}
             </select>
           </div>
+          <div>
+            <label className="field-label" htmlFor="avail-facility">
+              Facility
+            </label>
+            <select
+              id="avail-facility"
+              className="field-input"
+              value={facilityId}
+              onChange={(e) => setFacilityId(e.target.value)}
+              disabled={facilitiesHere.length === 0}
+            >
+              {facilitiesHere.length === 0 ? <option value="">Nothing set up here</option> : null}
+              {facilitiesHere.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* Only when there is a real choice: a facility with one machine should
+              not make the owner pick it every time. */}
+          {facility && facility.resources.length > 1 ? (
+            <div>
+              <label className="field-label" htmlFor="avail-resource">
+                Court / pitch
+              </label>
+              <select
+                id="avail-resource"
+                className="field-input"
+                value={resourceId}
+                onChange={(e) => setResourceId(e.target.value)}
+              >
+                {facility.resources.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-xs text-ink-500">Each court is blocked separately.</p>
+            </div>
+          ) : null}
           <div>
             <label className="field-label" htmlFor="avail-date">
               Date
@@ -228,7 +327,11 @@ export function AvailabilityManager({
       <section className="card">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="min-w-0 break-words font-semibold text-ink-900">
-            {day?.location.name ?? "Slots"} · {formatBusinessDate(date)}
+            {day
+              ? `${day.facility.name}${day.facility.name === day.resource.name ? "" : ` · ${day.resource.name}`} · ${day.location.name}`
+              : "Slots"}
+            {" · "}
+            {formatBusinessDate(date)}
           </h2>
           <div className="flex w-full gap-2 sm:w-auto">
             <Button
@@ -259,7 +362,7 @@ export function AvailabilityManager({
             <Spinner /> Loading slots…
           </p>
         ) : units.length === 0 ? (
-          <p className="mt-5 text-sm text-ink-500">No slots configured for this location.</p>
+          <p className="mt-5 text-sm text-ink-500">No slots configured for this facility.</p>
         ) : (
           <>
             <p className="mt-2 text-sm text-ink-600">Select slots to block or re-open. Confirmed bookings cannot be blocked.</p>
@@ -366,7 +469,38 @@ export function AvailabilityManager({
           conflicts.length ? (
             <ConflictList conflicts={conflicts} />
           ) : (
-            <>No bookings will be accepted at this location on {formatBusinessDate(date)}.</>
+            <div className="space-y-3">
+              <div>
+                <label className="field-label" htmlFor="day-scope">
+                  What should close?
+                </label>
+                <select
+                  id="day-scope"
+                  className="field-input"
+                  value={dayScope}
+                  onChange={(e) => setDayScope(e.target.value as BlockScope)}
+                >
+                  <option value="RESOURCE">
+                    {facility && facility.resources.length > 1
+                      ? `Only ${day?.resource.name ?? "this court"}`
+                      : `Only ${day?.facility.name ?? "this facility"}`}
+                  </option>
+                  {facility && facility.resources.length > 1 ? (
+                    <option value="FACILITY">All of {facility.name}</option>
+                  ) : null}
+                  <option value="LOCATION">Everything at {day?.location.name ?? "this ground"}</option>
+                </select>
+              </div>
+              <p>
+                No bookings will be accepted for{" "}
+                {dayScope === "LOCATION"
+                  ? "any facility at this ground"
+                  : dayScope === "FACILITY"
+                    ? `any ${facility?.name ?? "court"}`
+                    : "this one"}{" "}
+                on {formatBusinessDate(date)}.
+              </p>
+            </div>
           )
         }
         reasonLabel={conflicts.length ? undefined : "Reason"}

@@ -3,7 +3,7 @@ import { fail, ok, readJson } from "@/lib/api";
 import { recordAudit, requireAdmin } from "@/lib/auth";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
-import { locationUpdateSchema, slotConfigSchema } from "@/lib/validation";
+import { locationUpdateSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
@@ -36,33 +36,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 }
 
-/** Operating hours, slot length, prices, booking window and hold duration. */
-export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    const admin = await requireAdmin();
-    const id = parseId((await params).id);
-    const config = slotConfigSchema.parse(await readJson(request));
-
-    const db = await getDb();
-    const location = await collections.locations(db).findOne({ _id: id });
-    if (!location) throw appError("NOT_FOUND", "That location does not exist.");
-
-    await collections.slotConfigs(db).updateOne(
-      { locationId: id },
-      { $set: { ...config, updatedAt: new Date() }, $setOnInsert: { locationId: id } },
-      { upsert: true },
-    );
-
-    // Existing bookings keep their price snapshot; only future pricing changes.
-    await recordAudit(admin, "PRICE_CHANGED", "location", id.toHexString(), {
-      openMin: config.openMin,
-      closeMin: config.closeMin,
-      slotMinutes: config.slotMinutes,
-      priceRules: config.priceRules,
-    });
-
-    return ok({ saved: true });
-  } catch (err) {
-    return fail(err, { route: "PUT /api/admin/locations/[id]" });
-  }
-}
+/**
+ * Hours and pricing live on the FACILITY now, not the location: a ground can
+ * sell hourly turf and 15-minute bowling side by side, and those cannot share one
+ * schedule. See PUT /api/admin/facilities/[id].
+ */

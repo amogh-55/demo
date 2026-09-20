@@ -10,7 +10,11 @@ export const metadata: Metadata = { title: "Availability", robots: { index: fals
 
 export default async function AdminAvailabilityPage() {
   const db = await getDb();
-  const locations = await collections.locations(db).find({}).sort({ name: 1 }).toArray();
+  const [locations, facilities, resources] = await Promise.all([
+    collections.locations(db).find({}).sort({ name: 1 }).toArray(),
+    collections.facilities(db).find({}).sort({ sortOrder: 1, name: 1 }).toArray(),
+    collections.resources(db).find({}).sort({ sortOrder: 1, name: 1 }).toArray(),
+  ]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
@@ -19,12 +23,20 @@ export default async function AdminAvailabilityPage() {
         <p className="text-sm text-ink-600">Block slots for tournaments or maintenance, and re-open them later.</p>
       </div>
 
-      {locations.length === 0 ? (
-        <EmptyState title="No locations yet." hint="Add a location before managing availability." />
+      {facilities.length === 0 ? (
+        <EmptyState title="Nothing to manage yet." hint="Add a facility under Locations first." />
       ) : (
         <AvailabilityManager
           today={istDateString()}
           locations={locations.map((l) => ({ id: l._id.toHexString(), name: l.name }))}
+          facilities={facilities.map((f) => ({
+            id: f._id.toHexString(),
+            locationId: f.locationId.toHexString(),
+            name: f.name,
+            resources: resources
+              .filter((r) => r.facilityId.equals(f._id))
+              .map((r) => ({ id: r._id.toHexString(), name: r.name })),
+          }))}
         />
       )}
     </div>

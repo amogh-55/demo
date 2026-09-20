@@ -31,6 +31,19 @@ const IST_OFFSET = 330 * 60_000;
 const LOCATION_ID = new ObjectId("000000000000000000000001");
 const OTHER_LOCATION_ID = new ObjectId("000000000000000000000002");
 
+const FACILITY_ID = new ObjectId("000000000000000000000011");
+const OTHER_FACILITY_ID = new ObjectId("000000000000000000000012");
+const COURTS_FACILITY_ID = new ObjectId("000000000000000000000013");
+const BOWLING_FACILITY_ID = new ObjectId("000000000000000000000014");
+
+/** The turf under test. Everything keyed on a resource, as the engine is. */
+const RESOURCE_ID = new ObjectId("000000000000000000000021");
+const OTHER_RESOURCE_ID = new ObjectId("000000000000000000000022");
+/** Two courts sharing one facility — the independence case. */
+const COURT_1_ID = new ObjectId("000000000000000000000023");
+const COURT_2_ID = new ObjectId("000000000000000000000024");
+const BOWLING_ID = new ObjectId("000000000000000000000025");
+
 const SCHEDULE = {
   slotMinutes: 60,
   openMin: 17 * 60, // 5 PM
@@ -40,6 +53,28 @@ const SCHEDULE = {
   priceRules: [
     { fromMin: 17 * 60, toMin: 19 * 60, price: 800 },
     { fromMin: 19 * 60, toMin: 23 * 60, price: 900 },
+  ],
+  oversPerSlot: 0,
+  payAtVenueMaxOvers: 0,
+  ballTypes: [],
+};
+
+/**
+ * 15-minute blocks of ten overs, priced per block rather than by the clock.
+ * Up to 40 overs is paid for at the ground; beyond that, online first.
+ */
+const BOWLING_SCHEDULE = {
+  slotMinutes: 15,
+  openMin: 17 * 60,
+  closeMin: 23 * 60,
+  bookingWindowDays: 30,
+  holdMinutes: 10,
+  priceRules: [{ fromMin: 17 * 60, toMin: 23 * 60, price: 0 }],
+  oversPerSlot: 10,
+  payAtVenueMaxOvers: 40,
+  ballTypes: [
+    { id: "synthetic", name: "Synthetic ball", pricePerSlot: 180 },
+    { id: "leather", name: "Leather ball", pricePerSlot: 100 },
   ],
 };
 
@@ -93,7 +128,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     // The suite owns this database outright, so it starts from a clean fixture.
     await Promise.all([
       collections.locations(db).deleteMany({}),
-      collections.slotConfigs(db).deleteMany({}),
+      collections.facilities(db).deleteMany({}),
+      collections.resources(db).deleteMany({}),
     ]);
 
     const now = new Date();
@@ -107,6 +143,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
           name,
           slug: name.toLowerCase().replace(/\s+/g, "-"),
           address: "Test address",
+          mapsUrl: "",
           description: "",
           image: "",
           phone: "9876543210",
@@ -116,9 +153,51 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         },
         { upsert: true },
       );
-      await collections.slotConfigs(db).replaceOne(
-        { locationId: id },
-        { locationId: id, ...SCHEDULE, updatedAt: now },
+    }
+
+    for (const [id, locationId, name, kind, config] of [
+      [FACILITY_ID, LOCATION_ID, "Box Cricket", "HOURLY", SCHEDULE],
+      [OTHER_FACILITY_ID, OTHER_LOCATION_ID, "Box Cricket", "HOURLY", SCHEDULE],
+      [COURTS_FACILITY_ID, LOCATION_ID, "Pickleball", "HOURLY", SCHEDULE],
+      [BOWLING_FACILITY_ID, LOCATION_ID, "Bowling Machine", "OVERS", BOWLING_SCHEDULE],
+    ] as const) {
+      await collections.facilities(db).replaceOne(
+        { _id: id },
+        {
+          locationId,
+          name,
+          slug: `${name.toLowerCase().replace(/\s+/g, "-")}-${id.toHexString().slice(-2)}`,
+          kind,
+          description: "",
+          sortOrder: 0,
+          active: true,
+          config,
+          createdAt: now,
+          updatedAt: now,
+        },
+        { upsert: true },
+      );
+    }
+
+    for (const [id, facilityId, locationId, name] of [
+      [RESOURCE_ID, FACILITY_ID, LOCATION_ID, "Turf"],
+      [OTHER_RESOURCE_ID, OTHER_FACILITY_ID, OTHER_LOCATION_ID, "Turf"],
+      [COURT_1_ID, COURTS_FACILITY_ID, LOCATION_ID, "Court 1"],
+      [COURT_2_ID, COURTS_FACILITY_ID, LOCATION_ID, "Court 2"],
+      [BOWLING_ID, BOWLING_FACILITY_ID, LOCATION_ID, "Machine"],
+    ] as const) {
+      await collections.resources(db).replaceOne(
+        { _id: id },
+        {
+          locationId,
+          facilityId,
+          name,
+          slug: `${name.toLowerCase().replace(/\s+/g, "-")}-${id.toHexString().slice(-2)}`,
+          sortOrder: 0,
+          active: true,
+          createdAt: now,
+          updatedAt: now,
+        },
         { upsert: true },
       );
     }
@@ -141,7 +220,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
   describe("availability", () => {
     it("lists every configured slot as available on an empty day", async () => {
-      const result = await service.getAvailability(LOCATION_ID, futureDate());
+      const result = await service.getAvailability(RESOURCE_ID, futureDate());
       assert.equal(result.units.length, 6); // 5 PM – 11 PM in one-hour units
       assert.ok(result.units.every((u) => u.status === "AVAILABLE"));
       assert.equal(result.units[0]!.price, 800);
@@ -149,8 +228,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
 
     it("never exposes customer data", async () => {
-      await service.createHold({ locationId: LOCATION_ID, date: futureDate(), startMin: 1020, endMin: 1080 });
-      const result = await service.getAvailability(LOCATION_ID, futureDate());
+      await service.createHold({ resourceId: RESOURCE_ID, date: futureDate(), startMin: 1020, endMin: 1080 });
+      const result = await service.getAvailability(RESOURCE_ID, futureDate());
       const serialised = JSON.stringify(result);
       assert.ok(!serialised.includes("customerName"));
       assert.ok(!serialised.includes("holdToken"));
@@ -158,22 +237,22 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
 
     it("refuses past dates", async () => {
-      await assert.rejects(() => service.getAvailability(LOCATION_ID, pastDate()), /already passed/i);
+      await assert.rejects(() => service.getAvailability(RESOURCE_ID, pastDate()), /already passed/i);
     });
 
     it("refuses dates beyond the booking window", async () => {
-      await assert.rejects(() => service.getAvailability(LOCATION_ID, futureDate(45)), /days in advance/i);
+      await assert.rejects(() => service.getAvailability(RESOURCE_ID, futureDate(45)), /days in advance/i);
     });
 
     it("refuses an inactive location", async () => {
-      await assert.rejects(() => service.getAvailability(OTHER_LOCATION_ID, futureDate()), /not accepting bookings/i);
+      await assert.rejects(() => service.getAvailability(OTHER_RESOURCE_ID, futureDate()), /not accepting bookings/i);
     });
 
     it("marks slots whose start time has already passed as PAST, keeping later ones bookable", async () => {
       const today = new Date(Date.now() + IST_OFFSET).toISOString().slice(0, 10);
       // Pretend it is 8:30 PM IST today.
       const now = new Date(new Date(`${today}T20:30:00.000Z`).getTime() - IST_OFFSET);
-      const result = await service.getAvailability(LOCATION_ID, today, now);
+      const result = await service.getAvailability(RESOURCE_ID, today, now);
 
       const fivePm = result.units.find((u) => u.startMin === 1020)!;
       const tenPm = result.units.find((u) => u.startMin === 22 * 60)!;
@@ -187,63 +266,63 @@ describe("booking engine", { skip: !HAS_DB }, () => {
   describe("holds", () => {
     it("holds a single hour and prices it from the schedule", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       assert.equal(hold.amount, 800);
       assert.equal(hold.holdToken.length, 64);
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "HELD");
     });
 
     it("holds every underlying unit of a multi-hour request", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1260 }); // 5–9
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1260 }); // 5–9
       assert.equal(hold.amount, 800 + 800 + 900 + 900);
 
-      const units = await collections.slotUnits(db).find({ locationId: LOCATION_ID, date }).toArray();
+      const units = await collections.slotUnits(db).find({ resourceId: RESOURCE_ID, date }).toArray();
       assert.equal(units.length, 4);
       assert.ok(units.every((u) => u.status === "HELD"));
     });
 
     it("rejects a range that does not line up with the schedule", async () => {
       await assert.rejects(
-        () => service.createHold({ locationId: LOCATION_ID, date: futureDate(), startMin: 1050, endMin: 1110 }),
+        () => service.createHold({ resourceId: RESOURCE_ID, date: futureDate(), startMin: 1050, endMin: 1110 }),
         /not bookable/i,
       );
     });
 
     it("never persists the raw hold token", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
-      const unit = await collections.slotUnits(db).findOne({ locationId: LOCATION_ID, date, startMin: 1020 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      const unit = await collections.slotUnits(db).findOne({ resourceId: RESOURCE_ID, date, startMin: 1020 });
       assert.notEqual(unit!.holdTokenHash, hold.holdToken);
       assert.equal(unit!.holdTokenHash!.length, 64); // sha-256 hex
     });
 
     it("recovers a live hold from its token, so a refresh does not double-book", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 });
       const recovered = await service.getHold(hold.holdToken);
       assert.equal(recovered?.startMin, 1020);
       assert.equal(recovered?.endMin, 1140);
       assert.equal(recovered?.amount, 1600);
 
-      const units = await collections.slotUnits(db).countDocuments({ locationId: LOCATION_ID, date });
+      const units = await collections.slotUnits(db).countDocuments({ resourceId: RESOURCE_ID, date });
       assert.equal(units, 2, "recovery must not create more reservations");
     });
 
     it("releases a hold on request", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       await service.releaseHold(hold.holdToken);
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
     });
 
     it("treats an expired hold as available without any cleanup job running", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
 
       // Wind the hold's expiry into the past; the document still says HELD.
       await collections.slotUnits(db).updateOne(
@@ -254,17 +333,17 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       const stored = await collections.slotUnits(db).findOne({ date, startMin: 1020 });
       assert.equal(stored!.status, "HELD", "the stored row is deliberately left stale");
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
       assert.equal(await service.getHold(hold.holdToken), null);
     });
 
     it("lets a new customer take over a slot whose hold expired", async () => {
       const date = futureDate();
-      const first = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const first = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       await collections.slotUnits(db).updateMany({ date }, { $set: { holdUntil: new Date(Date.now() - 60_000) } });
 
-      const second = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const second = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       assert.notEqual(second.holdToken, first.holdToken);
 
       // And the first customer can no longer submit against it.
@@ -282,23 +361,23 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("refuses to hold a slot on a blocked day", async () => {
       const date = futureDate();
-      await service.blockDay({ locationId: LOCATION_ID, date, reason: "Festival", force: false, admin: ADMIN });
+      await service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Festival", force: false, admin: ADMIN });
       await assert.rejects(
-        () => service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 }),
+        () => service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 }),
         /not taking bookings/i,
       );
     });
 
     it("refuses to hold an inactive location", async () => {
       await assert.rejects(
-        () => service.createHold({ locationId: OTHER_LOCATION_ID, date: futureDate(), startMin: 1020, endMin: 1080 }),
+        () => service.createHold({ resourceId: OTHER_RESOURCE_ID, date: futureDate(), startMin: 1020, endMin: 1080 }),
         /not accepting bookings/i,
       );
     });
 
     it("refuses to hold a past date", async () => {
       await assert.rejects(
-        () => service.createHold({ locationId: LOCATION_ID, date: pastDate(), startMin: 1020, endMin: 1080 }),
+        () => service.createHold({ resourceId: RESOURCE_ID, date: pastDate(), startMin: 1020, endMin: 1080 }),
         /already passed/i,
       );
     });
@@ -306,12 +385,612 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
   /* ── Concurrency: the core guarantee ───────────────────────────────── */
 
+  /* ── Independent resources ─────────────────────────────────────────── */
+
+  describe("independent courts", () => {
+    /**
+     * The requirement the whole resource layer exists for: Court 1 and Court 2
+     * are separate things, so the same hour sells twice. If slot identity were
+     * still keyed on the location, the second hold here would collide.
+     */
+    it("lets two customers book the same hour on different courts", async () => {
+      const on = futureDate(6);
+      const first = await service.createHold({ resourceId: COURT_1_ID, date: on, startMin: 1080, endMin: 1140 });
+      const second = await service.createHold({ resourceId: COURT_2_ID, date: on, startMin: 1080, endMin: 1140 });
+
+      assert.notEqual(first.holdToken, second.holdToken);
+      assert.equal(first.resourceName, "Court 1");
+      assert.equal(second.resourceName, "Court 2");
+
+      for (const id of [COURT_1_ID, COURT_2_ID]) {
+        const availability = await service.getAvailability(id, on);
+        assert.equal(availability.units.find((u) => u.startMin === 1080)!.status, "HELD");
+      }
+    });
+
+    it("still refuses a second booking of the same hour on the SAME court", async () => {
+      const on = futureDate(6);
+      await service.createHold({ resourceId: COURT_1_ID, date: on, startMin: 1080, endMin: 1140 });
+      await assert.rejects(
+        () => service.createHold({ resourceId: COURT_1_ID, date: on, startMin: 1080, endMin: 1140 }),
+        /just taken by someone else/i,
+      );
+    });
+
+    it("keeps simultaneous holds on one court down to a single winner", async () => {
+      const on = futureDate(6);
+      const results = await Promise.allSettled([
+        service.createHold({ resourceId: COURT_1_ID, date: on, startMin: 1200, endMin: 1260 }),
+        service.createHold({ resourceId: COURT_1_ID, date: on, startMin: 1200, endMin: 1260 }),
+        service.createHold({ resourceId: COURT_1_ID, date: on, startMin: 1200, endMin: 1260 }),
+      ]);
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    });
+
+    it("blocks one court without touching the other", async () => {
+      const on = futureDate(6);
+      await service.blockSlots({
+        resourceId: COURT_1_ID,
+        date: on,
+        startMin: 1080,
+        endMin: 1140,
+        reason: "Resurfacing",
+        force: false,
+        admin: ADMIN,
+      });
+
+      const blocked = await service.getAvailability(COURT_1_ID, on);
+      const open = await service.getAvailability(COURT_2_ID, on);
+      assert.equal(blocked.units.find((u) => u.startMin === 1080)!.status, "BLOCKED");
+      assert.equal(open.units.find((u) => u.startMin === 1080)!.status, "AVAILABLE");
+    });
+
+    it("closes one court for a day without closing the other", async () => {
+      const on = futureDate(6);
+      await service.blockDay({ resourceId: COURT_1_ID, date: on, reason: "Repairs", force: false, admin: ADMIN });
+
+      assert.equal((await service.getAvailability(COURT_1_ID, on)).dayBlocked, true);
+      assert.equal((await service.getAvailability(COURT_2_ID, on)).dayBlocked, false);
+    });
+  });
+
+  /* ── Bowling machine: overs, ball pricing, 15-minute units ──────────── */
+
+  describe("bowling machine", () => {
+    it("sells 15-minute units rather than hours", async () => {
+      const availability = await service.getAvailability(BOWLING_ID, futureDate());
+      assert.equal(availability.facilityKind, "OVERS");
+      assert.equal(availability.slotMinutes, 15);
+      assert.equal(availability.units.length, 24); // 5 PM – 11 PM in quarter hours
+      assert.equal(availability.units[0]!.endMin - availability.units[0]!.startMin, 15);
+      assert.equal(availability.oversPerSlot, 10);
+      assert.equal(availability.payAtVenueMaxOvers, 40);
+    });
+
+    /** The ladder is generated from the rule, so it can never disagree with it. */
+    it("offers overs up to what the day can actually hold", async () => {
+      const availability = await service.getAvailability(BOWLING_ID, futureDate());
+      assert.deepEqual(availability.oversLadder.slice(0, 4), [10, 20, 30, 40]);
+      // 6 hours open / 15-minute blocks = 24 blocks = 240 overs.
+      assert.equal(availability.oversLadder.at(-1), 240);
+    });
+
+    /** Every overs option must lock exactly the quarter-hours it takes. */
+    it("reserves the right number of consecutive units for each overs option", async () => {
+      // A different day each time, all inside the 30-day booking window, so the
+      // four cases cannot collide with one another.
+      for (const [overs, expectedUnits, daysAhead] of [
+        [10, 1, 17],
+        [20, 2, 18],
+        [30, 3, 19],
+        [40, 4, 20],
+      ] as const) {
+        const on = futureDate(daysAhead);
+        const hold = await service.createHold({
+          resourceId: BOWLING_ID,
+          date: on,
+          startMin: 1080,
+          overs,
+          ballTypeId: "synthetic",
+        });
+
+        assert.equal(hold.overs, overs);
+        assert.equal(hold.endMin - hold.startMin, expectedUnits * 15);
+        const units = await collections.slotUnits(db).find({ resourceId: BOWLING_ID, date: on }).toArray();
+        assert.equal(units.length, expectedUnits, `${overs} overs should lock ${expectedUnits} units`);
+        assert.ok(units.every((u) => u.status === "HELD"));
+      }
+    });
+
+    /**
+     * The owner sells blocks, not clock time: ₹180 buys ten synthetic overs, so
+     * twenty costs ₹360 and forty ₹720. Nothing is pro-rated by the hour.
+     */
+    it("charges one ball price per block of overs", async () => {
+      for (const [overs, expected, daysAhead] of [
+        [10, 180, 7],
+        [20, 360, 8],
+        [30, 540, 9],
+        [40, 720, 10],
+      ] as const) {
+        const hold = await service.createHold({
+          resourceId: BOWLING_ID,
+          date: futureDate(daysAhead),
+          startMin: 1080,
+          overs,
+          ballTypeId: "synthetic",
+        });
+        assert.equal(hold.amount, expected, `${overs} synthetic overs should cost ${expected}`);
+        assert.equal(hold.ballTypeName, "Synthetic ball");
+      }
+    });
+
+    it("charges a different ball at its own block price", async () => {
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: futureDate(11),
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "leather",
+      });
+      assert.equal(hold.amount, 200, "two blocks of a 100-per-block ball");
+    });
+
+    /**
+     * There is no ceiling. The owner said customers may book 50, 60 or 70 overs
+     * as they like, so the only limit is how much of the day is left.
+     */
+    it("allows sessions well beyond the quick-pick options", async () => {
+      for (const [overs, expectedUnits, price, daysAhead] of [
+        [50, 5, 900, 12],
+        [70, 7, 1260, 13],
+        [120, 12, 2160, 14],
+      ] as const) {
+        const on = futureDate(daysAhead);
+        const hold = await service.createHold({
+          resourceId: BOWLING_ID,
+          date: on,
+          startMin: 1020,
+          overs,
+          ballTypeId: "synthetic",
+        });
+        assert.equal(hold.overs, overs);
+        assert.equal(hold.amount, price, `${overs} overs should cost ${price}`);
+        const units = await collections.slotUnits(db).find({ resourceId: BOWLING_ID, date: on }).toArray();
+        assert.equal(units.length, expectedUnits);
+      }
+    });
+
+    /** A fraction of a block cannot be reserved, so it is refused outright. */
+    it("refuses overs that are not a whole number of blocks", async () => {
+      for (const overs of [5, 15, 25, 33] as const) {
+        await assert.rejects(
+          () =>
+            service.createHold({
+              resourceId: BOWLING_ID,
+              date: futureDate(),
+              startMin: 1080,
+              overs,
+              ballTypeId: "synthetic",
+            }),
+          /blocks of 10/i,
+          `${overs} overs is not a whole number of blocks`,
+        );
+      }
+    });
+
+    /** The real limit: a session that would run past closing time. */
+    it("refuses a session that will not fit before closing", async () => {
+      await assert.rejects(
+        () =>
+          service.createHold({
+            resourceId: BOWLING_ID,
+            date: futureDate(),
+            startMin: 1350, // 10:30 PM, with the machine closing at 11
+            overs: 40,
+            ballTypeId: "synthetic",
+          }),
+        /will not fit/i,
+      );
+    });
+
+    it("refuses a ball type that does not exist", async () => {
+      await assert.rejects(
+        () =>
+          service.createHold({
+            resourceId: BOWLING_ID,
+            date: futureDate(),
+            startMin: 1080,
+            overs: 10,
+            ballTypeId: "golf-ball",
+          }),
+        /choose a ball type/i,
+      );
+    });
+
+    /**
+     * All-or-nothing at the 15-minute level: if a quarter-hour in the middle of a
+     * 30-over session is gone, the earlier ones must NOT be left reserved.
+     */
+    it("reserves nothing when any required quarter-hour is taken", async () => {
+      const on = futureDate(8);
+      // Someone already holds 5:30–5:45.
+      await service.createHold({
+        resourceId: BOWLING_ID,
+        date: on,
+        startMin: 1050,
+        overs: 10,
+        ballTypeId: "synthetic",
+      });
+
+      await assert.rejects(() =>
+        service.createHold({
+          resourceId: BOWLING_ID,
+          date: on,
+          startMin: 1020,
+          overs: 30, // 5:00–5:45, which runs straight through the held quarter
+          ballTypeId: "synthetic",
+        }),
+      );
+
+      const units = await collections
+        .slotUnits(db)
+        .find({ resourceId: BOWLING_ID, date: on, status: "HELD" })
+        .toArray();
+      assert.equal(units.length, 1, "the failed session must not leave its earlier units reserved");
+      assert.equal(units[0]!.startMin, 1050);
+    });
+
+    it("lets only one of two overlapping simultaneous sessions win", async () => {
+      const on = futureDate(9);
+      const results = await Promise.allSettled([
+        service.createHold({ resourceId: BOWLING_ID, date: on, startMin: 1080, overs: 20, ballTypeId: "synthetic" }),
+        service.createHold({ resourceId: BOWLING_ID, date: on, startMin: 1095, overs: 20, ballTypeId: "leather" }),
+      ]);
+      // The two overlap on 6:15–6:30, so they cannot both succeed.
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    });
+
+    it("carries the overs and the ball onto the booking", async () => {
+      const on = futureDate(15);
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: on,
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "leather",
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+      });
+
+      assert.equal(booking.overs, 20);
+      assert.equal(booking.ballTypeName, "Leather ball");
+      assert.equal(booking.amount, 200, "two blocks of a 100-per-block ball");
+      assert.equal(booking.facilityName, "Bowling Machine");
+      assert.equal(booking.unitStarts.length, 2);
+    });
+  });
+
+  /* ── Short sessions are paid for at the ground ──────────────────────── */
+
+  describe("pay at the ground", () => {
+    /**
+     * The owner's rule: up to 40 overs, do not make the customer pay online.
+     * Confirm it on the spot and take the money when they arrive.
+     */
+    it("confirms a short session immediately with no screenshot", async () => {
+      const on = futureDate(16);
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: on,
+        startMin: 1080,
+        overs: 40,
+        ballTypeId: "synthetic",
+      });
+      assert.equal(hold.payAtVenue, true, "the customer must be told before they commit");
+
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+      });
+
+      assert.equal(booking.status, "CONFIRMED");
+      assert.equal(booking.payAtVenue, true);
+      assert.equal(booking.payments.length, 0);
+      assert.equal(booking.paymentScreenshotKey, null);
+      // Money is still owed — it just has not been collected yet.
+      assert.equal(booking.paymentVerificationStatus, "PENDING");
+      assert.equal(booking.amount, 720);
+      assert.equal(booking.amountPaid, 0);
+    });
+
+    /** Confirmed means the slots are BOOKED, not merely pending review. */
+    it("locks the slots outright", async () => {
+      const on = futureDate(17);
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: on,
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+      });
+
+      const units = await collections.slotUnits(db).find({ resourceId: BOWLING_ID, date: on }).toArray();
+      assert.equal(units.length, 2);
+      assert.ok(units.every((u) => u.status === "BOOKED"), units.map((u) => u.status).join(","));
+
+      const availability = await service.getAvailability(BOWLING_ID, on);
+      assert.equal(availability.units.find((u) => u.startMin === 1080)!.status, "BOOKED");
+    });
+
+    /** Above the threshold the normal payment flow applies, unchanged. */
+    it("still demands payment for a long session", async () => {
+      const on = futureDate(18);
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: on,
+        startMin: 1020,
+        overs: 50,
+        ballTypeId: "synthetic",
+      });
+      assert.equal(hold.payAtVenue, false);
+
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: null,
+          }),
+        /payment screenshot/i,
+      );
+
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+      });
+      assert.equal(booking.status, "PENDING");
+      assert.equal(booking.payAtVenue, false);
+    });
+
+    /** Hourly facilities are untouched by any of this. */
+    it("never applies to an hourly booking", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(19),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      assert.equal(hold.payAtVenue, false);
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: null,
+          }),
+        /payment screenshot/i,
+      );
+    });
+
+    /**
+     * Without this a no-show would hold the machine for good: the booking is
+     * already CONFIRMED, and confirmed bookings cannot normally be released.
+     */
+    it("lets an admin cancel a no-show and put the slots back on sale", async () => {
+      const on = futureDate(20);
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: on,
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+      });
+
+      const rejected = await service.rejectBooking(booking._id, "Did not turn up", ADMIN);
+      assert.equal(rejected.status, "REJECTED");
+
+      const availability = await service.getAvailability(BOWLING_ID, on);
+      assert.equal(availability.units.find((u) => u.startMin === 1080)!.status, "AVAILABLE");
+      assert.equal(availability.units.find((u) => u.startMin === 1095)!.status, "AVAILABLE");
+    });
+
+    /**
+     * The cash the owner takes at the gate has to land somewhere, or the day's
+     * takings are permanently short by every pay-at-venue booking.
+     */
+    it("lets the admin record the cash taken at the gate", async () => {
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: futureDate(21),
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+      });
+
+      const paid = await service.recordManualPayment({
+        bookingId: booking._id,
+        amount: booking.amount,
+        note: "Cash at the gate",
+        admin: ADMIN,
+      });
+
+      assert.equal(paid.amountPaid, booking.amount);
+      assert.equal(paid.paymentVerificationStatus, "VERIFIED");
+      assert.equal(paid.status, "CONFIRMED", "taking the money must not change the booking's state");
+    });
+
+    /** Once money is recorded, cancelling is a refund conversation, not a click. */
+    it("refuses to cancel one that has been paid for", async () => {
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: futureDate(22),
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+      });
+      await service.recordManualPayment({
+        bookingId: booking._id,
+        amount: booking.amount,
+        note: "Cash at the gate",
+        admin: ADMIN,
+      });
+
+      await assert.rejects(
+        () => service.rejectBooking(booking._id, "Changed their mind", ADMIN),
+        /refund the customer/i,
+      );
+    });
+  });
+
+  /* ── Mobile verification ───────────────────────────────────────────── */
+
+  describe("phone verification gate", () => {
+    /** With the switch off nothing is asked for and nothing is sent. */
+    it("books without verification when the toggle is off", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(12),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        requirePhoneVerification: false,
+      });
+      assert.equal(booking.status, "PENDING");
+      assert.equal(booking.phoneVerified, false);
+    });
+
+    it("refuses an unverified number when the toggle is on", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(13),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: SCREENSHOT,
+            requirePhoneVerification: true,
+            verifiedPhone: null,
+          }),
+        /verify your mobile number/i,
+      );
+    });
+
+    /**
+     * Verifying one number must not let a booking be made in another. Otherwise
+     * the code proves nothing about the number the owner will actually ring.
+     */
+    it("refuses a number other than the one that was verified", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(14),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: SCREENSHOT,
+            requirePhoneVerification: true,
+            verifiedPhone: "9999999999",
+          }),
+        /verify your mobile number/i,
+      );
+    });
+
+    /** A refused submission must leave the hold alone so the customer can finish. */
+    it("keeps the hold when verification fails", async () => {
+      const date = futureDate(15);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      await assert.rejects(() =>
+        service.submitBooking({
+          holdToken: hold.holdToken,
+          customerName: "Ravi Kumar",
+          customerPhone: "9876543210",
+          paymentScreenshotKey: SCREENSHOT,
+          requirePhoneVerification: true,
+          verifiedPhone: null,
+        }),
+      );
+
+      const recovered = await service.getHold(hold.holdToken);
+      assert.ok(recovered, "the hold must survive a refused submission");
+      assert.equal(recovered!.submittedBookingReference, null);
+    });
+
+    it("accepts the matching verified number and records it", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(16),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        requirePhoneVerification: true,
+        verifiedPhone: "9876543210",
+      });
+      assert.equal(booking.status, "PENDING");
+      assert.equal(booking.phoneVerified, true);
+    });
+  });
+
   describe("concurrency", () => {
     it("lets exactly one of two simultaneous identical requests win", async () => {
       const date = futureDate();
       const results = await Promise.allSettled([
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 }),
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 }),
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 }),
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 }),
       ]);
 
       const won = results.filter((r) => r.status === "fulfilled");
@@ -320,7 +999,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(lost.length, 1);
       assert.match((lost[0] as PromiseRejectedResult).reason.message, /just taken|another customer|try again/i);
 
-      const units = await collections.slotUnits(db).find({ locationId: LOCATION_ID, date }).toArray();
+      const units = await collections.slotUnits(db).find({ resourceId: RESOURCE_ID, date }).toArray();
       const hashes = new Set(units.map((u) => u.holdTokenHash));
       assert.equal(hashes.size, 1, "all held units must belong to the same hold");
       assert.equal(units.length, 2);
@@ -329,8 +1008,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     it("lets exactly one of two overlapping multi-hour requests win (5–7 vs 6–8)", async () => {
       const date = futureDate();
       const results = await Promise.allSettled([
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 }), // 5–7
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1080, endMin: 1200 }), // 6–8
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 }), // 5–7
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1080, endMin: 1200 }), // 6–8
       ]);
 
       assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
@@ -338,7 +1017,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       // No partial reservation may survive the loser's rollback.
       const held = await collections
         .slotUnits(db)
-        .find({ locationId: LOCATION_ID, date, status: "HELD", holdUntil: { $gt: new Date() } })
+        .find({ resourceId: RESOURCE_ID, date, status: "HELD", holdUntil: { $gt: new Date() } })
         .toArray();
       const hashes = new Set(held.map((u) => u.holdTokenHash));
       assert.equal(hashes.size, 1, "a rolled-back hold must leave no units behind");
@@ -348,25 +1027,25 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     it("allows adjacent bookings because intervals are half-open", async () => {
       const date = futureDate();
       const results = await Promise.allSettled([
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 }), // [5,7)
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1140, endMin: 1260 }), // [7,9)
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 }), // [5,7)
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1260 }), // [7,9)
       ]);
 
       assert.equal(results.filter((r) => r.status === "fulfilled").length, 2, "5–7 and 7–9 do not overlap");
-      const units = await collections.slotUnits(db).countDocuments({ locationId: LOCATION_ID, date, status: "HELD" });
+      const units = await collections.slotUnits(db).countDocuments({ resourceId: RESOURCE_ID, date, status: "HELD" });
       assert.equal(units, 4);
     });
 
     it("keeps the database consistent under a burst of competing requests", async () => {
       const date = futureDate();
       const attempts = Array.from({ length: 8 }, () =>
-        service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 }),
+        service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 }),
       );
       const results = await Promise.allSettled(attempts);
 
       assert.equal(results.filter((r) => r.status === "fulfilled").length, 1, "only one winner out of eight");
 
-      const units = await collections.slotUnits(db).find({ locationId: LOCATION_ID, date }).toArray();
+      const units = await collections.slotUnits(db).find({ resourceId: RESOURCE_ID, date }).toArray();
       assert.equal(units.length, 2, "no duplicate slot-unit documents");
       assert.equal(new Set(units.map((u) => `${u.startMin}`)).size, 2, "no duplicate unit identities");
       assert.equal(new Set(units.map((u) => u.holdTokenHash)).size, 1, "one owner only");
@@ -374,7 +1053,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("refuses a second booking on an already confirmed slot", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -385,7 +1064,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       await service.confirmBooking(booking._id, ADMIN);
 
       await assert.rejects(
-        () => service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 }),
+        () => service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 }),
         /just taken|another customer/i,
       );
     });
@@ -395,7 +1074,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
   describe("booking submission", () => {
     async function holdAndSubmit(date = futureDate(), startMin = 1020, endMin = 1140) {
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin, endMin });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin, endMin });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -422,24 +1101,24 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("keeps the original price after the schedule is repriced", async () => {
       const { booking } = await holdAndSubmit();
-      await collections.slotConfigs(db).updateOne(
-        { locationId: LOCATION_ID },
-        { $set: { priceRules: [{ fromMin: 0, toMin: 1440, price: 5000 }] } },
+      await collections.facilities(db).updateOne(
+        { _id: FACILITY_ID },
+        { $set: { "config.priceRules": [{ fromMin: 0, toMin: 1440, price: 5000 }] } },
       );
 
       const stored = await collections.bookings(db).findOne({ _id: booking._id });
       assert.equal(stored!.amount, 1600, "historic bookings must not be repriced");
 
       // Restore the schedule for the remaining tests.
-      await collections.slotConfigs(db).updateOne(
-        { locationId: LOCATION_ID },
-        { $set: { priceRules: SCHEDULE.priceRules } },
+      await collections.facilities(db).updateOne(
+        { _id: FACILITY_ID },
+        { $set: { "config.priceRules": SCHEDULE.priceRules } },
       );
     });
 
     it("returns the same booking when the same hold is submitted twice", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const payload = {
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -456,7 +1135,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("survives two simultaneous submissions of one hold", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const payload = {
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -472,7 +1151,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("refuses submission after the hold expired, creating nothing", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       await collections.slotUnits(db).updateMany({ date }, { $set: { holdUntil: new Date(Date.now() - 1000) } });
 
       await assert.rejects(
@@ -503,8 +1182,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("stops one customer submitting another customer's hold", async () => {
       const date = futureDate();
-      const victim = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
-      const attacker = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1140, endMin: 1200 });
+      const victim = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      const attacker = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1200 });
 
       const booking = await service.submitBooking({
         holdToken: attacker.holdToken,
@@ -523,8 +1202,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("refuses submission once the day has been blocked", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
-      await service.blockDay({ locationId: LOCATION_ID, date, reason: "Storm", force: true, admin: ADMIN });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      await service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Storm", force: true, admin: ADMIN });
 
       await assert.rejects(
         () =>
@@ -543,7 +1222,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
   describe("admin actions", () => {
     async function pendingBooking(date = futureDate(), startMin = 1020, endMin = 1140) {
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin, endMin });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin, endMin });
       return service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -567,7 +1246,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
       assert.ok(units.every((u) => u.status === "BOOKED"));
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "BOOKED");
     });
 
@@ -588,11 +1267,11 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(rejected.status, "REJECTED");
       assert.equal(rejected.rejectionReason, "Payment not received");
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
 
       // And the freed slot can genuinely be taken by someone else.
-      const next = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const next = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       assert.ok(next.holdToken);
     });
 
@@ -633,7 +1312,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
   describe("screenshot retention", () => {
     /** A booking on `date` that has been paid for, with a screenshot on file. */
     async function paidBooking(date: string) {
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Retention Test",
@@ -689,7 +1368,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("leaves a staff-recorded payment alone — there is no image to delete", async () => {
       const date = futureDate(1);
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1140, endMin: 1200 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1200 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Cash Payer",
@@ -711,7 +1390,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     it("blocks free slots and stops customers booking them", async () => {
       const date = futureDate();
       const outcome = await service.blockSlots({
-        locationId: LOCATION_ID,
+        resourceId: RESOURCE_ID,
         date,
         startMin: 1020,
         endMin: 1260,
@@ -721,11 +1400,11 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       });
       assert.equal(outcome.blocked, 4);
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "BLOCKED");
       // A closed ground says so, rather than blaming an imaginary other customer.
       await assert.rejects(
-        () => service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 }),
+        () => service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 }),
         /ground is closed/i,
       );
     });
@@ -735,7 +1414,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       await assert.rejects(
         () =>
           service.blockSlots({
-            locationId: LOCATION_ID,
+            resourceId: RESOURCE_ID,
             date,
             startMin: 1020,
             endMin: 1080,
@@ -746,42 +1425,42 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         /already passed/i,
       );
       await assert.rejects(
-        () => service.blockDay({ locationId: LOCATION_ID, date, reason: "Festival", force: false, admin: ADMIN }),
+        () => service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Festival", force: false, admin: ADMIN }),
         /already passed/i,
       );
       // Nothing was written on the way to the rejection.
-      assert.equal(await collections.dayBlocks(db).countDocuments({ locationId: LOCATION_ID, date }), 0);
-      assert.equal(await collections.slotUnits(db).countDocuments({ locationId: LOCATION_ID, date }), 0);
+      assert.equal(await collections.dayBlocks(db).countDocuments({ resourceId: RESOURCE_ID, date }), 0);
+      assert.equal(await collections.slotUnits(db).countDocuments({ resourceId: RESOURCE_ID, date }), 0);
     });
 
     it("still re-opens a past date that was blocked before the guard existed", async () => {
       const date = pastDate();
       await collections.dayBlocks(db).insertOne({
-        locationId: LOCATION_ID,
+        resourceId: RESOURCE_ID,
         date,
         reason: "Legacy",
         blockedBy: "tester",
         blockedAt: new Date(),
       } as never);
-      assert.equal(await service.unblockDay(LOCATION_ID, date), true);
+      assert.equal(await service.unblockDay(RESOURCE_ID, date), true);
     });
 
     it("re-opens blocked slots", async () => {
       const date = futureDate();
-      await service.blockSlots({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140, reason: "Rain", force: false, admin: ADMIN });
-      const unblocked = await service.unblockSlots({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 });
+      await service.blockSlots({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140, reason: "Rain", force: false, admin: ADMIN });
+      const unblocked = await service.unblockSlots({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 });
       assert.equal(unblocked, 2);
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
     });
 
     it("warns instead of blocking when a live hold is in the way", async () => {
       const date = futureDate();
-      await service.createHold({ locationId: LOCATION_ID, date, startMin: 1080, endMin: 1200 }); // 6–8
+      await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1080, endMin: 1200 }); // 6–8
 
       const outcome = await service.blockSlots({
-        locationId: LOCATION_ID,
+        resourceId: RESOURCE_ID,
         date,
         startMin: 1020,
         endMin: 1140, // 5–7 overlaps the hold's 6–7
@@ -802,7 +1481,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
      */
     it("releases the hours outside the block when a straddling booking is rejected", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 }); // 5–7
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 }); // 5–7
       await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -812,7 +1491,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
       // Block 5–6 only: the booking's 6–7 hour sits outside the blocked range.
       const outcome = await service.blockSlots({
-        locationId: LOCATION_ID,
+        resourceId: RESOURCE_ID,
         date,
         startMin: 1020,
         endMin: 1080,
@@ -822,7 +1501,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       });
       assert.equal(outcome.blocked, 1);
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "BLOCKED");
       assert.equal(
         availability.units.find((u) => u.startMin === 1080)!.status,
@@ -831,13 +1510,13 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       );
 
       // And it must genuinely be bookable, not merely look available.
-      const next = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1080, endMin: 1140 });
+      const next = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1080, endMin: 1140 });
       assert.equal(next.startMin, 1080);
     });
 
     it("blocks over a pending request only when forced, and rejects that booking explicitly", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -846,7 +1525,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       });
 
       const outcome = await service.blockSlots({
-        locationId: LOCATION_ID,
+        resourceId: RESOURCE_ID,
         date,
         startMin: 1020,
         endMin: 1080,
@@ -863,7 +1542,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("refuses outright to block a confirmed booking", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -876,7 +1555,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       await assert.rejects(
         () =>
           service.blockSlots({
-            locationId: LOCATION_ID,
+            resourceId: RESOURCE_ID,
             date,
             startMin: 1020,
             endMin: 1140,
@@ -895,23 +1574,23 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("blocks a whole day with a single document", async () => {
       const date = futureDate();
-      await service.blockDay({ locationId: LOCATION_ID, date, reason: "Festival", force: false, admin: ADMIN });
+      await service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Festival", force: false, admin: ADMIN });
 
-      assert.equal(await collections.dayBlocks(db).countDocuments({ locationId: LOCATION_ID, date }), 1);
+      assert.equal(await collections.dayBlocks(db).countDocuments({ resourceId: RESOURCE_ID, date }), 1);
       assert.equal(
-        await collections.slotUnits(db).countDocuments({ locationId: LOCATION_ID, date }),
+        await collections.slotUnits(db).countDocuments({ resourceId: RESOURCE_ID, date }),
         0,
         "a day block must not materialise one row per slot",
       );
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.dayBlocked, true);
       assert.ok(availability.units.every((u) => u.status === "BLOCKED"));
     });
 
     it("refuses a day block that would bury a confirmed booking", async () => {
       const date = futureDate();
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -922,26 +1601,26 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       await service.confirmBooking(booking._id, ADMIN);
 
       await assert.rejects(
-        () => service.blockDay({ locationId: LOCATION_ID, date, reason: "Festival", force: true, admin: ADMIN }),
+        () => service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Festival", force: true, admin: ADMIN }),
         /confirmed bookings/i,
       );
     });
 
     it("re-opens a blocked day", async () => {
       const date = futureDate();
-      await service.blockDay({ locationId: LOCATION_ID, date, reason: "Festival", force: false, admin: ADMIN });
-      assert.equal(await service.unblockDay(LOCATION_ID, date), true);
+      await service.blockDay({ resourceId: RESOURCE_ID, date, reason: "Festival", force: false, admin: ADMIN });
+      assert.equal(await service.unblockDay(RESOURCE_ID, date), true);
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.dayBlocked, false);
       assert.ok(availability.units.every((u) => u.status === "AVAILABLE"));
     });
 
     it("does not reopen a blocked slot when a booking on a different slot is rejected", async () => {
       const date = futureDate();
-      await service.blockSlots({ locationId: LOCATION_ID, date, startMin: 1140, endMin: 1200, reason: "Nets", force: false, admin: ADMIN });
+      await service.blockSlots({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1200, reason: "Nets", force: false, admin: ADMIN });
 
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -959,7 +1638,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
   describe("partial payments", () => {
     async function pendingBooking(date = futureDate(), startMin = 1020, endMin = 1140) {
-      const hold = await service.createHold({ locationId: LOCATION_ID, date, startMin, endMin });
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin, endMin });
       return service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
@@ -979,10 +1658,10 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(short.status, "PENDING", "a shortfall must not change the booking status");
 
       // The crucial part: nobody else may take the slots.
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "PENDING");
       await assert.rejects(
-        () => service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080 }),
+        () => service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 }),
         /just taken|another customer/i,
       );
     });
@@ -1044,7 +1723,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(rejected.paymentVerificationStatus, "REJECTED");
       assert.equal(rejected.status, "PENDING", "the booking itself survives a bad screenshot");
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(
         availability.units.find((u) => u.startMin === 1020)!.status,
         "PENDING",
@@ -1156,7 +1835,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(released.status, "REJECTED");
       assert.equal(released.amountPaid, 1400, "the payment record survives for the refund conversation");
 
-      const availability = await service.getAvailability(LOCATION_ID, date);
+      const availability = await service.getAvailability(RESOURCE_ID, date);
       assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
     });
 
@@ -1240,7 +1919,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
   describe("housekeeping", () => {
     it("cleans up expired holds without affecting correctness either way", async () => {
       const date = futureDate();
-      await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 });
+      await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 });
       await collections.slotUnits(db).updateMany({ date }, { $set: { holdUntil: new Date(Date.now() - 1000) } });
 
       const cleaned = await service.cleanupExpiredHolds();
@@ -1252,7 +1931,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("leaves booked and blocked units alone during cleanup", async () => {
       const date = futureDate();
-      await service.blockSlots({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1080, reason: "Nets", force: false, admin: ADMIN });
+      await service.blockSlots({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080, reason: "Nets", force: false, admin: ADMIN });
       await service.cleanupExpiredHolds();
       const unit = await collections.slotUnits(db).findOne({ date, startMin: 1020 });
       assert.equal(unit!.status, "BLOCKED");
@@ -1265,7 +1944,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     it("holds no duplicate unit identity, orphan hold or booking without slots", async () => {
       const date = futureDate();
       // Build a realistic mixture of state.
-      const holdA = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1020, endMin: 1140 });
+      const holdA = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1140 });
       const bookingA = await service.submitBooking({
         holdToken: holdA.holdToken,
         customerName: "Ravi Kumar",
@@ -1275,7 +1954,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       await acceptPayment(bookingA);
       await service.confirmBooking(bookingA._id, ADMIN);
 
-      const holdB = await service.createHold({ locationId: LOCATION_ID, date, startMin: 1140, endMin: 1200 });
+      const holdB = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1200 });
       const bookingB = await service.submitBooking({
         holdToken: holdB.holdToken,
         customerName: "Sita R",
@@ -1284,9 +1963,9 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       });
       await service.rejectBooking(bookingB._id, "Payment not received", ADMIN);
 
-      await service.createHold({ locationId: LOCATION_ID, date, startMin: 1200, endMin: 1260 });
+      await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1200, endMin: 1260 });
 
-      const units = await collections.slotUnits(db).find({ locationId: LOCATION_ID, date }).toArray();
+      const units = await collections.slotUnits(db).find({ resourceId: RESOURCE_ID, date }).toArray();
       const bookings = await collections.bookings(db).find({}).toArray();
 
       // No duplicate unit identities.

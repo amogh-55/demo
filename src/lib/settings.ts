@@ -16,13 +16,20 @@ export const defaultSettings = (): Omit<SettingsDoc, "_id"> => ({
   upiId: process.env.UPI_ID || "",
   upiPayeeName: process.env.UPI_PAYEE_NAME || "",
   upiQrImageUrl: process.env.UPI_QR_IMAGE_URL || "",
+  // Both default OFF. Every SMS costs the owner money, so nothing sends until
+  // they have an account and switch it on deliberately.
+  otpEnabled: false,
+  notifyPhone: "",
+  notifyOnNewBooking: false,
   updatedAt: new Date(),
 });
 
 export async function getSettings(): Promise<SettingsDoc> {
   const db = await getDb();
   const existing = await collections.settings(db).findOne({ _id: SETTINGS_ID });
-  if (existing) return existing;
+  // Merged over the defaults so a settings document saved before a field existed
+  // reads as its default rather than as undefined.
+  if (existing) return { ...defaultSettings(), ...existing, _id: SETTINGS_ID };
   return { _id: SETTINGS_ID, ...defaultSettings() };
 }
 

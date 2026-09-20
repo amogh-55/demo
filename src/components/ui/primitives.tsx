@@ -138,6 +138,15 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
-export function formatCurrency(amount: number): string {
+/**
+ * Money, or a dash.
+ *
+ * The guard is not decoration: a price read from a document written before a
+ * field was renamed arrives here as undefined, and an unguarded `.toLocaleString`
+ * takes down the whole booking page over one missing number. A dash tells the
+ * customer this price is not available and leaves everything else usable.
+ */
+export function formatCurrency(amount: number | null | undefined): string {
+  if (typeof amount !== "number" || !Number.isFinite(amount)) return "—";
   return `₹${amount.toLocaleString("en-IN")}`;
 }

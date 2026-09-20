@@ -1,8 +1,8 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { ArrowLeft } from "lucide-react";
-import { collections, getDb } from "@/lib/db";
-import { DEFAULT_SLOT_CONFIG } from "@/lib/booking/service";
+import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
+import { getPublicCatalog, widestBookingWindow } from "@/lib/catalog";
 import { istDateString } from "@/lib/time";
 import { getSettings } from "@/lib/settings";
 import { BookingFlow } from "@/components/customer/booking-flow";
@@ -11,25 +11,18 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Book a slot",
-  description: "Check live availability and book a cricket turf slot.",
+  description: "Check live availability and book box cricket, nets, a bowling machine or a pickleball court.",
 };
 
 export default async function BookPage({ searchParams }: { searchParams: Promise<{ location?: string }> }) {
   const { location } = await searchParams;
-  const db = await getDb();
-
-  const [locations, settings, configs] = await Promise.all([
-    collections.locations(db).find({ active: true }).sort({ name: 1 }).toArray(),
-    getSettings(),
-    collections.slotConfigs(db).find({}).toArray(),
-  ]);
+  const [locations, settings] = await Promise.all([getPublicCatalog(), getSettings()]);
 
   // The date picker's bounds come from the server in the business timezone. The
-  // widest configured window is used so the picker never hides a date some ground
-  // genuinely accepts; the availability API still enforces each location's own limit.
-  const bookingWindowDays = configs.length
-    ? Math.max(...configs.map((c) => c.bookingWindowDays))
-    : DEFAULT_SLOT_CONFIG.bookingWindowDays;
+  // widest configured window is used so the picker never hides a date some
+  // facility genuinely accepts; the availability API still enforces each one's
+  // own limit.
+  const bookingWindowDays = widestBookingWindow(locations, DEFAULT_HOURLY_CONFIG.bookingWindowDays);
 
   return (
     <div className="min-h-dvh bg-ink-950">
@@ -56,14 +49,8 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
             initialLocationSlug={location}
             today={istDateString()}
             bookingWindowDays={bookingWindowDays}
-            locations={locations.map((l) => ({
-              id: l._id.toHexString(),
-              name: l.name,
-              slug: l.slug,
-              address: l.address,
-              description: l.description,
-              image: l.image,
-            }))}
+            locations={locations}
+            otpEnabled={settings.otpEnabled}
             payment={{
               businessName: settings.businessName,
               upiId: settings.upiId,

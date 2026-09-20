@@ -15,11 +15,11 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const input = availabilityQuerySchema.parse({
-      locationId: url.searchParams.get("locationId") ?? "",
+      resourceId: url.searchParams.get("resourceId") ?? "",
       date: url.searchParams.get("date") ?? "",
     });
 
-    const availability = await getAvailability(input.locationId, input.date);
+    const availability = await getAvailability(input.resourceId, input.date);
     return ok(availability, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     return fail(err, { route: "GET /api/availability" });

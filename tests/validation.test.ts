@@ -6,7 +6,8 @@ import {
   customerNameSchema,
   phoneSchema,
   settingsSchema,
-  slotConfigSchema,
+  facilityConfigSchema,
+  locationCreateSchema,
 } from "../src/lib/validation";
 import { normaliseWhatsappNumber, confirmationMessage, rejectionMessage, whatsappUrl } from "../src/lib/whatsapp";
 
@@ -62,9 +63,20 @@ describe("booking submission payload", () => {
     assert.equal(bookingSubmitSchema.safeParse({ ...valid, holdToken: undefined }).success, false);
   });
 
-  it("requires a payment screenshot key", () => {
+  /**
+   * A missing key is allowed here because a short bowling session is paid for at
+   * the ground. Whether THIS booking may skip it is decided server-side from the
+   * hold, so leaving it out never makes a booking free by itself.
+   */
+  it("allows no screenshot at all, for pay-at-the-ground bookings", () => {
+    const parsed = bookingSubmitSchema.parse({ ...valid, paymentScreenshotKey: undefined });
+    assert.equal(parsed.paymentScreenshotKey, null);
+    assert.equal(bookingSubmitSchema.parse({ ...valid, paymentScreenshotKey: null }).paymentScreenshotKey, null);
+  });
+
+  it("still rejects a key that is present but malformed", () => {
     assert.equal(bookingSubmitSchema.safeParse({ ...valid, paymentScreenshotKey: "" }).success, false);
-    assert.equal(bookingSubmitSchema.safeParse({ ...valid, paymentScreenshotKey: undefined }).success, false);
+    assert.equal(bookingSubmitSchema.safeParse({ ...valid, paymentScreenshotKey: "nonsense.jpg" }).success, false);
   });
 
   /**
@@ -98,30 +110,101 @@ describe("booking submission payload", () => {
   });
 });
 
-describe("schedule configuration", () => {
+describe("facility configuration", () => {
   const base = {
     slotMinutes: 60,
     openMin: 6 * 60,
     closeMin: 23 * 60,
     priceRules: [{ fromMin: 6 * 60, toMin: 23 * 60, price: 800 }],
     bookingWindowDays: 30,
-    holdMinutes: 10,
+    holdMinutes: 5,
+    oversPerSlot: 0,
+    payAtVenueMaxOvers: 0,
+    ballTypes: [],
+  };
+
+  const bowling = {
+    ...base,
+    slotMinutes: 15,
+    priceRules: [{ fromMin: 6 * 60, toMin: 23 * 60, price: 0 }],
+    oversPerSlot: 10,
+    payAtVenueMaxOvers: 40,
+    ballTypes: [{ id: "synthetic", name: "Synthetic ball", pricePerSlot: 180 }],
   };
 
   it("accepts a sane configuration", () => {
-    assert.equal(slotConfigSchema.parse(base).slotMinutes, 60);
+    assert.equal(facilityConfigSchema.parse(base).slotMinutes, 60);
   });
 
   it("rejects closing before opening", () => {
-    assert.equal(slotConfigSchema.safeParse({ ...base, closeMin: 5 * 60 }).success, false);
+    assert.equal(facilityConfigSchema.safeParse({ ...base, closeMin: 5 * 60 }).success, false);
   });
 
   it("rejects hours that do not divide into whole slots", () => {
-    assert.equal(slotConfigSchema.safeParse({ ...base, closeMin: 22 * 60 + 30 }).success, false);
+    assert.equal(facilityConfigSchema.safeParse({ ...base, closeMin: 22 * 60 + 30 }).success, false);
   });
 
   it("requires at least one price band", () => {
-    assert.equal(slotConfigSchema.safeParse({ ...base, priceRules: [] }).success, false);
+    assert.equal(facilityConfigSchema.safeParse({ ...base, priceRules: [] }).success, false);
+  });
+
+  it("accepts a bowling configuration", () => {
+    const parsed = facilityConfigSchema.parse(bowling);
+    assert.equal(parsed.oversPerSlot, 10);
+    assert.equal(parsed.payAtVenueMaxOvers, 40);
+  });
+
+  /**
+   * A pay-at-the-ground limit of 45 on ten-over blocks could never be reached
+   * exactly: the customer books 40 or 50, so the rule would silently mean 40 and
+   * the owner would have set a number that does nothing.
+   */
+  it("rejects a pay-at-the-ground limit that is not a whole number of blocks", () => {
+    assert.equal(facilityConfigSchema.safeParse({ ...bowling, payAtVenueMaxOvers: 45 }).success, false);
+  });
+
+  it("accepts 0, meaning every session pays online", () => {
+    assert.equal(facilityConfigSchema.parse({ ...bowling, payAtVenueMaxOvers: 0 }).payAtVenueMaxOvers, 0);
+  });
+
+  it("rejects two ball types sharing an id", () => {
+    const broken = {
+      ...bowling,
+      ballTypes: [
+        { id: "synthetic", name: "Synthetic", pricePerSlot: 180 },
+        { id: "synthetic", name: "Also synthetic", pricePerSlot: 100 },
+      ],
+    };
+    assert.equal(facilityConfigSchema.safeParse(broken).success, false);
+  });
+});
+
+describe("maps links", () => {
+  /** A javascript: URL in this field would run in every customer's browser. */
+  it("refuses a link that is not http or https", () => {
+    for (const mapsUrl of ["javascript:alert(1)", "data:text/html,<script>", "maps.google.com"]) {
+      const result = locationCreateSchema.safeParse({
+        name: "Test Ground",
+        slug: "test-ground",
+        address: "Somewhere in Hyderabad",
+        phone: "9876543210",
+        mapsUrl,
+      });
+      assert.equal(result.success, false, `should reject ${mapsUrl}`);
+    }
+  });
+
+  it("accepts a real Google Maps link, and blank", () => {
+    for (const mapsUrl of ["https://maps.app.goo.gl/abc123", ""]) {
+      const result = locationCreateSchema.safeParse({
+        name: "Test Ground",
+        slug: "test-ground",
+        address: "Somewhere in Hyderabad",
+        phone: "9876543210",
+        mapsUrl,
+      });
+      assert.equal(result.success, true, `should accept "${mapsUrl}"`);
+    }
   });
 });
 

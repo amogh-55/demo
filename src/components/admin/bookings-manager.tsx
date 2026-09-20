@@ -13,6 +13,14 @@ interface AdminBooking {
   reference: string;
   locationId: string;
   locationName: string;
+  facilityName: string;
+  resourceName: string;
+  /** Bowling-machine bookings only. */
+  overs: number | null;
+  ballTypeName: string | null;
+  phoneVerified: boolean;
+  /** Short bowling sessions: confirmed on the spot, cash due at the ground. */
+  payAtVenue: boolean;
   date: string;
   startMin: number;
   endMin: number;
@@ -495,11 +503,22 @@ function BookingCard({
           <p className="text-[15px] font-semibold leading-tight text-ink-900">
             {formatRange(booking.startMin, booking.endMin)}
             <span className="ml-1.5 text-xs font-normal text-ink-500">
-              ({minutesToDuration(booking.endMin - booking.startMin)})
+              ({booking.overs !== null
+                ? `${booking.overs} overs${booking.ballTypeName ? `, ${booking.ballTypeName}` : ""}`
+                : minutesToDuration(booking.endMin - booking.startMin)})
             </span>
           </p>
+          {/* Which facility and which court, not just which ground: at a ground
+              selling three different things the ground name alone does not say
+              what the customer turns up to use. */}
           <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-ink-600">
             <span className="font-medium">{formatBusinessDate(booking.date)}</span>
+            <span className="text-ink-300" aria-hidden="true">·</span>
+            <span className="min-w-0 break-words">
+              {[booking.facilityName, booking.resourceName !== booking.facilityName ? booking.resourceName : null]
+                .filter(Boolean)
+                .join(" · ") || booking.locationName}
+            </span>
             <span className="text-ink-300" aria-hidden="true">·</span>
             <span className="min-w-0 break-words">{booking.locationName}</span>
           </p>
@@ -510,6 +529,9 @@ function BookingCard({
             <span className={cn("text-xs font-semibold", paidInFull ? "text-green-700" : "text-amber-700")}>
               {formatCurrency(booking.amountPaid)} received
             </span>
+          ) : booking.payAtVenue ? (
+            // Not a payment to chase: this customer was told to pay at the gate.
+            <span className="text-xs font-semibold text-amber-700">collect at the ground</span>
           ) : (
             <span className="text-xs text-ink-500">nothing received</span>
           )}

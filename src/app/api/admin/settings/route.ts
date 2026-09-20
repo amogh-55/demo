@@ -17,6 +17,9 @@ export async function GET() {
         upiId: settings.upiId,
         upiPayeeName: settings.upiPayeeName,
         upiQrImageUrl: settings.upiQrImageUrl,
+        otpEnabled: settings.otpEnabled,
+        notifyPhone: settings.notifyPhone,
+        notifyOnNewBooking: settings.notifyOnNewBooking,
       },
     });
   } catch (err) {
@@ -28,10 +31,19 @@ export async function PUT(request: Request) {
   try {
     const admin = await requireAdmin();
     const input = settingsSchema.parse(await readJson(request));
-    await saveSettings(input);
+    const saved = await saveSettings(input);
     // The UPI id itself is scrubbed by the logger; only the fact of a change is recorded.
-    await recordAudit(admin, "SETTINGS_UPDATED", "settings", "business", { fields: Object.keys(input) });
-    return ok({ saved: true });
+    // The SMS switches ARE recorded by value: turning them on starts spending the
+    // owner's money, so who did it and when belongs in the audit trail.
+    await recordAudit(admin, "SETTINGS_UPDATED", "settings", "business", {
+      fields: Object.keys(input),
+      otpEnabled: input.otpEnabled,
+      notifyOnNewBooking: input.notifyOnNewBooking,
+    });
+    return ok({
+      saved: true,
+      settings: { otpEnabled: saved.otpEnabled, notifyOnNewBooking: saved.notifyOnNewBooking },
+    });
   } catch (err) {
     return fail(err, { route: "PUT /api/admin/settings" });
   }

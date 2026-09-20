@@ -7,67 +7,134 @@ import { log } from "@/lib/log";
 import { deletePaymentScreenshot } from "@/lib/storage";
 import { daysFromToday, istDateString, istInstant, isValidBusinessDate } from "@/lib/time";
 import type {
+  BallType,
   BookingDoc,
   BookingTimelineEntry,
+  FacilityConfig,
+  FacilityDoc,
+  FacilityKind,
   PaymentAttempt,
   LocationDoc,
   PublicSlotStatus,
-  SlotConfigDoc,
+  ResourceDoc,
   SlotUnitDoc,
 } from "@/lib/types";
-import { buildDayTemplate, resolveUnits, totalPrice, type SlotUnitTemplate } from "./schedule";
+import {
+  applyBallPricing,
+  buildDayTemplate,
+  findBallType,
+  oversLadder,
+  resolveUnits,
+  slotsForOvers,
+  totalPrice,
+  type SlotUnitTemplate,
+} from "./schedule";
 import { generateBookingReference, generateHoldToken, hashHoldToken } from "./reference";
 
-/** Used until an admin saves a per-location configuration. */
-export const DEFAULT_SLOT_CONFIG = {
+/**
+ * How long a slot is held while the customer pays.
+ *
+ * Five minutes, not ten: the owner would rather a hesitant customer lose the
+ * hold and re-pick than have a ready buyer told the slot is taken by someone who
+ * wandered off. UPI payment plus a screenshot takes a minute or two in practice.
+ */
+export const DEFAULT_HOLD_MINUTES = 5;
+
+/** Starting point for a new hourly facility — box cricket, nets, a court. */
+export const DEFAULT_HOURLY_CONFIG: FacilityConfig = {
   slotMinutes: 60,
   openMin: 6 * 60,
   closeMin: 23 * 60,
   bookingWindowDays: 30,
-  holdMinutes: 10,
+  holdMinutes: DEFAULT_HOLD_MINUTES,
   priceRules: [
     { fromMin: 6 * 60, toMin: 17 * 60, price: 800 },
     { fromMin: 17 * 60, toMin: 23 * 60, price: 1200 },
   ],
+  oversPerSlot: 0,
+  payAtVenueMaxOvers: 0,
+  ballTypes: [],
 };
+
+/**
+ * Starting point for a new bowling machine.
+ *
+ * These are the owner's current rules, not laws: every number is editable in
+ * Admin → Locations, and the code reads them from the facility rather than here.
+ */
+export const DEFAULT_OVERS_CONFIG: FacilityConfig = {
+  slotMinutes: 15,
+  openMin: 6 * 60,
+  closeMin: 23 * 60,
+  bookingWindowDays: 30,
+  holdMinutes: DEFAULT_HOLD_MINUTES,
+  // Price 0 across the window: the ball type carries the price, and this rule
+  // exists only to mark the hours as sellable.
+  priceRules: [{ fromMin: 6 * 60, toMin: 23 * 60, price: 0 }],
+  oversPerSlot: 10,
+  payAtVenueMaxOvers: 40,
+  ballTypes: [
+    { id: "synthetic", name: "Synthetic ball", pricePerSlot: 180 },
+    { id: "leather", name: "Leather ball", pricePerSlot: 100 },
+  ],
+};
+
+export function defaultConfigFor(kind: FacilityKind): FacilityConfig {
+  return kind === "OVERS"
+    ? { ...DEFAULT_OVERS_CONFIG, ballTypes: DEFAULT_OVERS_CONFIG.ballTypes.map((b) => ({ ...b })) }
+    : { ...DEFAULT_HOURLY_CONFIG, priceRules: DEFAULT_HOURLY_CONFIG.priceRules.map((r) => ({ ...r })) };
+}
+
+/**
+ * Whether a session this size is confirmed on the spot and paid for at the ground.
+ *
+ * Decided here, from stored configuration and the overs the SERVER resolved, so a
+ * client cannot declare its own booking free by claiming to be small.
+ */
+export function isPayAtVenue(config: FacilityConfig, overs: number | null): boolean {
+  return overs !== null && config.payAtVenueMaxOvers > 0 && overs <= config.payAtVenueMaxOvers;
+}
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Context loading
  * ────────────────────────────────────────────────────────────────────── */
 
-export type EffectiveConfig = Pick<
-  SlotConfigDoc,
-  "slotMinutes" | "openMin" | "closeMin" | "priceRules" | "bookingWindowDays" | "holdMinutes"
->;
-
-export interface LocationContext {
+export interface ResourceContext {
   location: LocationDoc;
-  config: EffectiveConfig;
+  facility: FacilityDoc;
+  resource: ResourceDoc;
+  config: FacilityConfig;
   template: SlotUnitTemplate[];
 }
 
-export async function loadLocationContext(
+/**
+ * Everything needed to price and reserve time on one bookable resource.
+ *
+ * Walks resource → facility → location rather than the other way round, because
+ * the resource id is what every slot unit is keyed on: if it resolves, the rest
+ * of the chain is guaranteed to exist and to agree with it.
+ */
+export async function loadResourceContext(
   db: Db,
-  locationId: ObjectId,
+  resourceId: ObjectId,
   requireActive: boolean,
-): Promise<LocationContext> {
-  const location = await collections.locations(db).findOne({ _id: locationId });
+): Promise<ResourceContext> {
+  const resource = await collections.resources(db).findOne({ _id: resourceId });
+  if (!resource) throw appError("NOT_FOUND", "We could not find that court or pitch.");
+
+  const [facility, location] = await Promise.all([
+    collections.facilities(db).findOne({ _id: resource.facilityId }),
+    collections.locations(db).findOne({ _id: resource.locationId }),
+  ]);
+  if (!facility) throw appError("NOT_FOUND", "We could not find that facility.");
   if (!location) throw appError("NOT_FOUND", "We could not find that location.");
-  if (requireActive && !location.active) throw appError("LOCATION_INACTIVE");
 
-  const stored = await collections.slotConfigs(db).findOne({ locationId });
-  const config: EffectiveConfig = stored
-    ? {
-        slotMinutes: stored.slotMinutes,
-        openMin: stored.openMin,
-        closeMin: stored.closeMin,
-        priceRules: stored.priceRules,
-        bookingWindowDays: stored.bookingWindowDays,
-        holdMinutes: stored.holdMinutes,
-      }
-    : { ...DEFAULT_SLOT_CONFIG };
+  if (requireActive && (!location.active || !facility.active || !resource.active)) {
+    throw appError("LOCATION_INACTIVE");
+  }
 
-  return { location, config, template: buildDayTemplate(config) };
+  const config = facility.config;
+  return { location, facility, resource, config, template: buildDayTemplate(config) };
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -82,6 +149,11 @@ export interface AvailabilityUnit {
 }
 
 export interface AvailabilityResult {
+  resourceId: string;
+  resourceName: string;
+  facilityId: string;
+  facilityName: string;
+  facilityKind: FacilityKind;
   locationId: string;
   locationName: string;
   date: string;
@@ -89,6 +161,17 @@ export interface AvailabilityResult {
   holdMinutes: number;
   dayBlocked: boolean;
   units: AvailabilityUnit[];
+  /**
+   * OVERS facilities only. Sent with availability rather than fetched separately
+   * so the overs a customer is offered and the units behind them come from one
+   * consistent read of the schedule.
+   */
+  oversPerSlot: number;
+  /** Quick-pick overs, longest first limited by how much of the day one can fill. */
+  oversLadder: number[];
+  /** At or below this many overs, no online payment is asked for. 0 = always pay. */
+  payAtVenueMaxOvers: number;
+  ballTypes: Array<{ id: string; name: string; pricePerSlot: number }>;
 }
 
 /**
@@ -130,17 +213,17 @@ export function assertBookableDate(date: string, bookingWindowDays: number, now:
 }
 
 export async function getAvailability(
-  locationId: ObjectId,
+  resourceId: ObjectId,
   date: string,
   now: Date = new Date(),
 ): Promise<AvailabilityResult> {
   const db = await getDb();
-  const { location, config, template } = await loadLocationContext(db, locationId, true);
+  const { location, facility, resource, config, template } = await loadResourceContext(db, resourceId, true);
   assertBookableDate(date, config.bookingWindowDays, now);
 
   const [stored, dayBlock] = await Promise.all([
-    collections.slotUnits(db).find({ locationId, date }).toArray(),
-    collections.dayBlocks(db).findOne({ locationId, date }),
+    collections.slotUnits(db).find({ resourceId, date }).toArray(),
+    collections.dayBlocks(db).findOne({ resourceId, date }),
   ]);
 
   const byStart = new Map(stored.map((u) => [u.startMin, u]));
@@ -155,14 +238,29 @@ export async function getAvailability(
     return { startMin: slot.startMin, endMin: slot.endMin, price: slot.price, status };
   });
 
+  const isOvers = facility.kind === "OVERS";
+
   return {
-    locationId: locationId.toHexString(),
+    resourceId: resourceId.toHexString(),
+    resourceName: resource.name,
+    facilityId: facility._id.toHexString(),
+    facilityName: facility.name,
+    facilityKind: facility.kind,
+    locationId: location._id.toHexString(),
     locationName: location.name,
     date,
     slotMinutes: config.slotMinutes,
     holdMinutes: config.holdMinutes,
     dayBlocked: Boolean(dayBlock),
     units,
+    oversPerSlot: isOvers ? config.oversPerSlot : 0,
+    oversLadder: isOvers
+      ? oversLadder(config.oversPerSlot, config.slotMinutes, config.openMin, config.closeMin)
+      : [],
+    payAtVenueMaxOvers: isOvers ? config.payAtVenueMaxOvers : 0,
+    ballTypes: isOvers
+      ? config.ballTypes.map((b) => ({ id: b.id, name: b.name, pricePerSlot: b.pricePerSlot }))
+      : [],
   };
 }
 
@@ -209,47 +307,133 @@ function rethrowBookingError(err: unknown, event: string, context: Record<string
 export interface HoldResult {
   holdToken: string;
   holdUntil: Date;
+  resourceId: string;
+  resourceName: string;
+  facilityName: string;
+  facilityKind: FacilityKind;
   locationId: string;
   locationName: string;
   date: string;
   startMin: number;
   endMin: number;
+  overs: number | null;
+  ballTypeName: string | null;
+  /** True when this session is confirmed on the spot and paid for at the ground. */
+  payAtVenue: boolean;
   amount: number;
   breakdown: Array<{ startMin: number; endMin: number; price: number }>;
+}
+
+/**
+ * What the customer asked for, in whichever language their facility speaks.
+ *
+ * An hourly facility gets a time range off the grid. An overs facility gets a
+ * start time, a number of overs and a ball. Both end up as the same thing — a
+ * run of consecutive atomic units with a price each — which is why there is only
+ * one hold, one submit and one set of concurrency guarantees below.
+ */
+export interface BookingRequest {
+  startMin: number;
+  endMin?: number;
+  overs?: number;
+  ballTypeId?: string;
+}
+
+interface ResolvedRequest {
+  startMin: number;
+  endMin: number;
+  units: SlotUnitTemplate[];
+  overs: number | null;
+  ballType: BallType | null;
+}
+
+/**
+ * Turn a request into the exact units it needs and what each of them costs.
+ *
+ * Every price here is computed from the stored configuration. Nothing a browser
+ * sends contributes to an amount — the client picks WHAT to buy, never what it
+ * costs. Called again at submission time so a schedule edited mid-booking is
+ * caught rather than honoured.
+ */
+function resolveRequest(ctx: ResourceContext, input: BookingRequest): ResolvedRequest {
+  const { config, facility, template } = ctx;
+
+  if (facility.kind === "OVERS") {
+    if (config.ballTypes.length === 0 || config.oversPerSlot <= 0) {
+      throw appError("VALIDATION", "This facility is not set up for bookings yet. Please call the ground.");
+    }
+
+    const overs = input.overs ?? 0;
+    // No ceiling: a customer may book as many overs as the day still has room
+    // for. The only rule is that overs come in whole blocks, because a fraction
+    // of a slot is not a thing the machine can be reserved for.
+    const slots = slotsForOvers(config.oversPerSlot, overs);
+    if (slots === null) {
+      throw appError(
+        "VALIDATION",
+        `Overs are booked in blocks of ${config.oversPerSlot}. Please choose ${config.oversPerSlot}, ${config.oversPerSlot * 2}, ${config.oversPerSlot * 3} and so on.`,
+      );
+    }
+
+    const ballType = findBallType(config.ballTypes, input.ballTypeId ?? "");
+    if (!ballType) throw appError("VALIDATION", "Please choose a ball type.");
+
+    const endMin = input.startMin + slots * config.slotMinutes;
+    const units = resolveUnits(template, input.startMin, endMin);
+    if (!units || units.length === 0) {
+      // Almost always a session that would run past closing time, so say that
+      // rather than "not bookable", which reads as though the machine is broken.
+      throw appError(
+        "VALIDATION",
+        `${overs} overs will not fit from that time. Please pick an earlier start or fewer overs.`,
+      );
+    }
+
+    return {
+      startMin: input.startMin,
+      endMin,
+      units: applyBallPricing(units, ballType),
+      overs,
+      ballType,
+    };
+  }
+
+  const endMin = input.endMin ?? 0;
+  const units = resolveUnits(template, input.startMin, endMin);
+  if (!units || units.length === 0) {
+    throw appError("VALIDATION", "That time range is not bookable. Please pick from the listed slots.");
+  }
+  return { startMin: input.startMin, endMin, units, overs: null, ballType: null };
 }
 
 /**
  * Atomically reserve every atomic unit in [startMin, endMin) for `holdMinutes`.
  *
  * Why this is safe under concurrency:
- *  1. `slotUnits` carries a UNIQUE index on (locationId, date, startMin), so at
+ *  1. `slotUnits` carries a UNIQUE index on (resourceId, date, startMin), so at
  *     most one document can ever exist for a unit.
  *  2. Each unit is claimed by a conditional upsert whose filter matches only a
  *     free unit (absent, AVAILABLE, or an expired HELD). When the unit is really
  *     taken the filter misses, the upsert falls through to an insert, and the
  *     unique index rejects it with E11000 — the database refuses the double
  *     booking, not application code.
- *  3. Every unit is claimed inside one transaction, so a multi-hour request is
- *     all-or-nothing: a conflict on the last unit rolls the earlier ones back.
+ *  3. Every unit is claimed inside one transaction, so a multi-unit request is
+ *     all-or-nothing: a conflict on the last of a 40-over session's four
+ *     quarter-hours rolls the first three back. Nothing is ever half reserved.
  */
-export async function createHold(input: {
-  locationId: ObjectId;
-  date: string;
-  startMin: number;
-  endMin: number;
-  now?: Date;
-}): Promise<HoldResult> {
+export async function createHold(
+  input: BookingRequest & { resourceId: ObjectId; date: string; now?: Date },
+): Promise<HoldResult> {
   const now = input.now ?? new Date();
   const db = await getDb();
-  const { location, config, template } = await loadLocationContext(db, input.locationId, true);
+  const ctx = await loadResourceContext(db, input.resourceId, true);
+  const { location, facility, resource, config } = ctx;
 
   assertBookableDate(input.date, config.bookingWindowDays, now);
 
-  const units = resolveUnits(template, input.startMin, input.endMin);
-  if (!units || units.length === 0) {
-    throw appError("VALIDATION", "That time range is not bookable. Please pick from the listed slots.");
-  }
-  if (istInstant(input.date, input.startMin).getTime() <= now.getTime()) {
+  const { startMin, endMin, units, overs, ballType } = resolveRequest(ctx, input);
+
+  if (istInstant(input.date, startMin).getTime() <= now.getTime()) {
     throw appError("PAST_DATE", "That time has already passed. Please pick an upcoming slot.");
   }
 
@@ -257,35 +441,40 @@ export async function createHold(input: {
   const holdTokenHash = hashHoldToken(holdToken);
   const holdUntil = new Date(now.getTime() + config.holdMinutes * 60_000);
   const context = {
-    locationId: input.locationId.toHexString(),
+    resourceId: input.resourceId.toHexString(),
     date: input.date,
-    startMin: input.startMin,
-    endMin: input.endMin,
+    startMin,
+    endMin,
+    ...(overs !== null ? { overs } : {}),
   };
 
   try {
     await withTransaction(async (session, txDb) => {
       const dayBlock = await collections
         .dayBlocks(txDb)
-        .findOne({ locationId: input.locationId, date: input.date }, { session });
+        .findOne({ resourceId: input.resourceId, date: input.date }, { session });
       if (dayBlock) throw appError("DAY_BLOCKED");
 
       for (const unit of units) {
         await collections.slotUnits(txDb).updateOne(
           {
-            locationId: input.locationId,
+            resourceId: input.resourceId,
             date: input.date,
             startMin: unit.startMin,
             $or: [{ status: "AVAILABLE" }, { status: "HELD", holdUntil: { $lte: now } }],
           },
           {
             $set: {
+              locationId: resource.locationId,
+              facilityId: resource.facilityId,
               endMin: unit.endMin,
               status: "HELD",
               holdTokenHash,
               holdUntil,
               bookingId: null,
               price: unit.price,
+              ballTypeId: ballType?.id ?? null,
+              overs,
               blockReason: null,
               blockedBy: null,
               blockedAt: null,
@@ -302,9 +491,9 @@ export async function createHold(input: {
     // Work out which it was so the customer is told the truth.
     if (isDuplicateKeyError(err)) {
       const blocked = await collections.slotUnits(db).countDocuments({
-        locationId: input.locationId,
+        resourceId: input.resourceId,
         date: input.date,
-        startMin: { $gte: input.startMin, $lt: input.endMin },
+        startMin: { $gte: startMin, $lt: endMin },
         status: "BLOCKED",
       });
       if (blocked > 0) {
@@ -320,11 +509,18 @@ export async function createHold(input: {
   return {
     holdToken,
     holdUntil,
-    locationId: input.locationId.toHexString(),
+    resourceId: resource._id.toHexString(),
+    resourceName: resource.name,
+    facilityName: facility.name,
+    facilityKind: facility.kind,
+    locationId: location._id.toHexString(),
     locationName: location.name,
     date: input.date,
-    startMin: input.startMin,
-    endMin: input.endMin,
+    startMin,
+    endMin,
+    overs,
+    ballTypeName: ballType?.name ?? null,
+    payAtVenue: isPayAtVenue(config, overs),
     amount: totalPrice(units),
     breakdown: units.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price })),
   };
@@ -332,11 +528,18 @@ export async function createHold(input: {
 
 export interface HoldSnapshot {
   holdUntil: Date;
+  resourceId: string;
+  resourceName: string;
+  facilityName: string;
+  facilityKind: FacilityKind;
   locationId: string;
   locationName: string;
   date: string;
   startMin: number;
   endMin: number;
+  overs: number | null;
+  ballTypeName: string | null;
+  payAtVenue: boolean;
   amount: number;
   breakdown: Array<{ startMin: number; endMin: number; price: number }>;
   /** Set when this hold was already turned into a booking — used for refresh recovery. */
@@ -356,11 +559,18 @@ export async function getHold(holdToken: string, now: Date = new Date()): Promis
     if (booking) {
       return {
         holdUntil: now,
+        resourceId: booking.resourceId.toHexString(),
+        resourceName: booking.resourceName,
+        facilityName: booking.facilityName,
+        facilityKind: booking.overs === null ? "HOURLY" : "OVERS",
         locationId: booking.locationId.toHexString(),
         locationName: booking.locationName,
         date: booking.date,
         startMin: booking.startMin,
         endMin: booking.endMin,
+        overs: booking.overs,
+        ballTypeName: booking.ballTypeName,
+        payAtVenue: Boolean(booking.payAtVenue),
         amount: booking.amount,
         breakdown: booking.priceBreakdown,
         submittedBookingReference: booking.reference,
@@ -371,14 +581,27 @@ export async function getHold(holdToken: string, now: Date = new Date()): Promis
   const live = units.filter((u) => u.status === "HELD" && u.holdUntil && u.holdUntil.getTime() > now.getTime());
   if (live.length !== units.length) return null; // expired, released, or taken over
 
-  const location = await collections.locations(db).findOne({ _id: units[0]!.locationId });
+  const ctx = await loadResourceContext(db, units[0]!.resourceId, false).catch(() => null);
+  const ballTypeId = units[0]!.ballTypeId;
+  const ballType = ballTypeId && ctx ? findBallType(ctx.config.ballTypes, ballTypeId) : null;
+  const startMin = units[0]!.startMin;
+  const endMin = units[units.length - 1]!.endMin;
+  const overs = units[0]!.overs ?? null;
+
   return {
     holdUntil: live.reduce<Date>((min, u) => (u.holdUntil! < min ? u.holdUntil! : min), live[0]!.holdUntil!),
+    resourceId: units[0]!.resourceId.toHexString(),
+    resourceName: ctx?.resource.name ?? "",
+    facilityName: ctx?.facility.name ?? "",
+    facilityKind: ctx?.facility.kind ?? "HOURLY",
     locationId: units[0]!.locationId.toHexString(),
-    locationName: location?.name ?? "",
+    locationName: ctx?.location.name ?? "",
     date: units[0]!.date,
-    startMin: units[0]!.startMin,
-    endMin: units[units.length - 1]!.endMin,
+    startMin,
+    endMin,
+    overs,
+    ballTypeName: ballType?.name ?? null,
+    payAtVenue: ctx ? isPayAtVenue(ctx.config, overs) : false,
     amount: units.reduce((sum, u) => sum + u.price, 0),
     breakdown: units.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price })),
     submittedBookingReference: null,
@@ -415,7 +638,20 @@ export interface SubmitBookingInput {
   holdToken: string;
   customerName: string;
   customerPhone: string;
-  paymentScreenshotKey: string;
+  /**
+   * Null for a session small enough to pay for at the ground. Whether that is
+   * allowed is decided from stored configuration and the overs on the HOLD, so
+   * omitting it cannot itself make a booking free.
+   */
+  paymentScreenshotKey: string | null;
+  /**
+   * The number this device proved it controls, or null when verification is
+   * switched off. Supplied by the route from a signed httpOnly cookie, never
+   * from the request body — a client claiming "I am verified" proves nothing.
+   */
+  verifiedPhone?: string | null;
+  /** When true a booking is refused unless `verifiedPhone` matches the number given. */
+  requirePhoneVerification?: boolean;
   now?: Date;
 }
 
@@ -439,23 +675,55 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
     if (existing) return existing;
   }
 
+  // Checked before the slots are consumed, so a customer who has not verified
+  // their number keeps the hold and can finish rather than losing the slot.
+  if (input.requirePhoneVerification && input.verifiedPhone !== input.customerPhone) {
+    throw appError("VALIDATION", "Please verify your mobile number before booking.");
+  }
+
   const expired = units.some(
     (u) => u.status !== "HELD" || !u.holdUntil || u.holdUntil.getTime() <= now.getTime(),
   );
   if (expired) throw appError("HOLD_EXPIRED");
 
-  const locationId = units[0]!.locationId;
+  const resourceId = units[0]!.resourceId;
   const date = units[0]!.date;
-  const { location, config, template } = await loadLocationContext(db, locationId, true);
+  const ctx = await loadResourceContext(db, resourceId, true);
+  const { location, facility, resource, config, template } = ctx;
 
   // Price is recomputed from the server-side schedule; the browser never supplies it.
   const startMin = units[0]!.startMin;
   const endMin = units[units.length - 1]!.endMin;
-  const resolved = resolveUnits(template, startMin, endMin);
-  if (!resolved || resolved.length !== units.length) {
-    log.warn("hold_schedule_drift", { locationId: locationId.toHexString(), date, startMin, endMin });
+  const resolvedUnits = resolveUnits(template, startMin, endMin);
+  if (!resolvedUnits || resolvedUnits.length !== units.length) {
+    log.warn("hold_schedule_drift", { resourceId: resourceId.toHexString(), date, startMin, endMin });
     throw appError("HOLD_INVALID", "The schedule changed while you were booking. Please select the slot again.");
   }
+
+  // An overs booking is priced by its ball, and the ball it was held for is
+  // recorded on the units themselves. A ball the owner deleted mid-booking has no
+  // price any more, so the hold is refused rather than charged at some other rate.
+  let overs: number | null = null;
+  let ballType: BallType | null = null;
+  let resolved = resolvedUnits;
+  if (facility.kind === "OVERS") {
+    const heldBallId = units[0]!.ballTypeId ?? "";
+    ballType = findBallType(config.ballTypes, heldBallId);
+    overs = units[0]!.overs ?? null;
+    if (!ballType || overs === null) {
+      log.warn("hold_overs_drift", { resourceId: resourceId.toHexString(), date, startMin, endMin, heldBallId });
+      throw appError("HOLD_INVALID", "The prices changed while you were booking. Please select your session again.");
+    }
+    resolved = applyBallPricing(resolvedUnits, ballType);
+  }
+
+  // Decided from the hold and the stored configuration, never from the request:
+  // a client that simply omits its screenshot does not thereby book for free.
+  const payAtVenue = isPayAtVenue(config, overs);
+  if (!payAtVenue && !input.paymentScreenshotKey) {
+    throw appError("VALIDATION", "Please upload your payment screenshot to finish booking.");
+  }
+
   assertBookableDate(date, config.bookingWindowDays, now);
 
   const priceBreakdown = resolved.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price }));
@@ -469,53 +737,72 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
     const booking: BookingDoc = {
       _id: bookingId,
       reference,
-      locationId,
+      resourceId,
+      facilityId: facility._id,
+      locationId: location._id,
       locationName: location.name,
+      facilityName: facility.name,
+      resourceName: resource.name,
       date,
       startMin,
       endMin,
       unitStarts,
+      overs,
+      ballTypeName: ballType?.name ?? null,
+      payAtVenue,
       amount,
       priceBreakdown,
       customerName: input.customerName,
       customerPhone: input.customerPhone,
-      status: "PENDING",
+      phoneVerified: input.verifiedPhone === input.customerPhone,
+      // A pay-at-venue session is confirmed immediately: there is nothing for an
+      // admin to verify, and leaving it PENDING would put a queue in front of a
+      // booking the owner has already agreed to take money for at the gate.
+      status: payAtVenue ? "CONFIRMED" : "PENDING",
       paymentVerificationStatus: "PENDING",
-      payments: [
-        {
-          id: crypto.randomUUID(),
-          screenshotKey: input.paymentScreenshotKey,
-          uploadedAt: now,
-          amount: null,
-          status: "PENDING",
-          reviewedBy: null,
-          reviewedAt: null,
-          note: null,
-        },
-      ],
+      payments: input.paymentScreenshotKey
+        ? [
+            {
+              id: crypto.randomUUID(),
+              screenshotKey: input.paymentScreenshotKey,
+              uploadedAt: now,
+              amount: null,
+              status: "PENDING",
+              reviewedBy: null,
+              reviewedAt: null,
+              note: null,
+            },
+          ]
+        : [],
       amountPaid: 0,
       paymentScreenshotKey: input.paymentScreenshotKey,
-      paymentUploadedAt: now,
+      paymentUploadedAt: input.paymentScreenshotKey ? now : null,
       rejectionReason: null,
       holdTokenHash,
-      timeline: [
-        { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
-        { event: "PAYMENT_SCREENSHOT_UPLOADED", at: now, by: "customer" },
-      ],
+      timeline: payAtVenue
+        ? [
+            { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
+            { event: "BOOKING_CONFIRMED", at: now, by: "system", note: "Paying at the ground" },
+          ]
+        : [
+            { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
+            { event: "PAYMENT_SCREENSHOT_UPLOADED", at: now, by: "customer" },
+          ],
       createdAt: now,
       updatedAt: now,
     };
 
     try {
       await withTransaction(async (session, txDb) => {
-        const dayBlock = await collections.dayBlocks(txDb).findOne({ locationId, date }, { session });
+        const dayBlock = await collections.dayBlocks(txDb).findOne({ resourceId, date }, { session });
         if (dayBlock) throw appError("DAY_BLOCKED");
 
         // Re-assert ownership inside the transaction: the hold must still be ours,
-        // still HELD, and still unexpired at commit time.
+        // still HELD, and still unexpired at commit time. A pay-at-venue session
+        // goes straight to BOOKED, because it is confirmed in the same breath.
         const claim = await collections.slotUnits(txDb).updateMany(
           { holdTokenHash, status: "HELD", holdUntil: { $gt: now }, bookingId: null },
-          { $set: { status: "PENDING", bookingId, holdUntil: null, updatedAt: now } },
+          { $set: { status: payAtVenue ? "BOOKED" : "PENDING", bookingId, holdUntil: null, updatedAt: now } },
           { session },
         );
         if (claim.modifiedCount !== units.length) throw appError("HOLD_EXPIRED");
@@ -523,7 +810,7 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
         await collections.bookings(txDb).insertOne(booking, { session });
       });
 
-      log.info("booking_submitted", { reference, locationId: locationId.toHexString(), date, startMin, endMin, amount });
+      log.info("booking_submitted", { reference, resourceId: resourceId.toHexString(), date, startMin, endMin, amount });
       return booking;
     } catch (err) {
       if (isDuplicateKeyError(err) && attempt < 4) continue; // reference collision — try another
@@ -535,7 +822,7 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       const raced = await collections.bookings(db).findOne({ holdTokenHash });
       if (raced) return raced;
 
-      rethrowBookingError(err, "booking_submit", { locationId: locationId.toHexString(), date, startMin, endMin });
+      rethrowBookingError(err, "booking_submit", { resourceId: resourceId.toHexString(), date, startMin, endMin });
     }
   }
 
@@ -740,7 +1027,13 @@ export async function recordManualPayment(input: {
   const updated = await collections.bookings(db).findOneAndUpdate(
     {
       _id: input.bookingId,
-      status: "PENDING",
+      /**
+       * A pay-at-the-ground booking is CONFIRMED from the moment it is made and
+       * still owes its money, so this is the only way that cash ever gets
+       * recorded. Without it the owner takes ₹720 at the gate and the booking
+       * reads as unpaid for ever.
+       */
+      $or: [{ status: "PENDING" }, { status: "CONFIRMED", payAtVenue: true }],
       // Same spam ceiling as customer uploads.
       $expr: { $lt: [{ $size: { $ifNull: ["$payments", []] } }, 10] },
     },
@@ -913,12 +1206,28 @@ export async function rejectBooking(
     const booking = await collections.bookings(txDb).findOne({ _id: bookingId }, { session });
     if (!booking) throw appError("NOT_FOUND", "That booking no longer exists.");
     if (booking.status === "REJECTED") return booking; // idempotent
-    if (booking.status !== "PENDING") {
-      throw appError("CONFLICT", `This booking is ${booking.status.toLowerCase()} and can no longer be rejected.`);
+
+    /**
+     * A pay-at-venue session is CONFIRMED the moment it is made, so without this
+     * a customer who never turned up would hold the machine for good — there
+     * would be no state from which the slots could ever be released. It is only
+     * allowed while nothing has been collected: once money is recorded against a
+     * booking, cancelling it is a refund conversation, not a click.
+     */
+    const cancellableConfirmed =
+      booking.status === "CONFIRMED" && booking.payAtVenue && (booking.amountPaid ?? 0) === 0;
+
+    if (booking.status !== "PENDING" && !cancellableConfirmed) {
+      throw appError(
+        "CONFLICT",
+        booking.status === "CONFIRMED" && (booking.amountPaid ?? 0) > 0
+          ? "This booking has been paid for. Refund the customer before cancelling it."
+          : `This booking is ${booking.status.toLowerCase()} and can no longer be rejected.`,
+      );
     }
 
     await collections.slotUnits(txDb).updateMany(
-      { bookingId, status: { $in: ["PENDING", "HELD"] } },
+      { bookingId, status: { $in: ["PENDING", "HELD", ...(cancellableConfirmed ? ["BOOKED" as const] : [])] } },
       {
         $set: {
           status: "AVAILABLE",
@@ -932,7 +1241,7 @@ export async function rejectBooking(
     );
 
     const updated = await collections.bookings(txDb).findOneAndUpdate(
-      { _id: bookingId, status: "PENDING" },
+      { _id: bookingId, status: booking.status },
       {
         $set: {
           status: "REJECTED",
@@ -985,7 +1294,7 @@ export interface BlockConflict {
 
 /** Live holds, pending requests and confirmed bookings that a block would tread on. */
 export async function findBlockConflicts(
-  locationId: ObjectId,
+  resourceId: ObjectId,
   date: string,
   startMin: number,
   endMin: number,
@@ -994,7 +1303,7 @@ export async function findBlockConflicts(
   const db = await getDb();
   const units = await collections
     .slotUnits(db)
-    .find({ locationId, date, startMin: { $gte: startMin, $lt: endMin } })
+    .find({ resourceId, date, startMin: { $gte: startMin, $lt: endMin } })
     .sort({ startMin: 1 })
     .toArray();
 
@@ -1030,7 +1339,7 @@ export interface BlockOutcome {
  * a CONFIRMED booking can never be blocked over at all.
  */
 export async function blockSlots(input: {
-  locationId: ObjectId;
+  resourceId: ObjectId;
   date: string;
   startMin: number;
   endMin: number;
@@ -1042,9 +1351,9 @@ export async function blockSlots(input: {
   const now = input.now ?? new Date();
   assertNotPast(input.date, now);
   const db = await getDb();
-  const { template } = await loadLocationContext(db, input.locationId, false);
+  const { resource, template } = await loadResourceContext(db, input.resourceId, false);
 
-  const conflicts = await findBlockConflicts(input.locationId, input.date, input.startMin, input.endMin, now);
+  const conflicts = await findBlockConflicts(input.resourceId, input.date, input.startMin, input.endMin, now);
   const confirmed = conflicts.filter((c) => c.status === "BOOKED");
   if (confirmed.length > 0) {
     throw appError(
@@ -1065,15 +1374,18 @@ export async function blockSlots(input: {
     await withTransaction(async (session, txDb) => {
       for (const unit of targets) {
         const result = await collections.slotUnits(txDb).updateOne(
-          { locationId: input.locationId, date: input.date, startMin: unit.startMin, status: { $ne: "BOOKED" } },
+          { resourceId: input.resourceId, date: input.date, startMin: unit.startMin, status: { $ne: "BOOKED" } },
           {
             $set: {
+              locationId: resource.locationId,
+              facilityId: resource.facilityId,
               endMin: unit.endMin,
               status: "BLOCKED",
               holdTokenHash: null,
               holdUntil: null,
               bookingId: null,
               price: unit.price,
+              ballTypeId: null,
               blockReason: input.reason,
               blockedBy: input.admin.username,
               blockedAt: now,
@@ -1141,12 +1453,12 @@ export async function blockSlots(input: {
       // A booking was confirmed between the conflict scan and the write.
       throw appError("CONFLICT", "These slots changed while you were blocking them. Please refresh and try again.");
     }
-    log.error("block_slots_failed", { err, locationId: input.locationId.toHexString(), date: input.date });
+    log.error("block_slots_failed", { err, resourceId: input.resourceId.toHexString(), date: input.date });
     throw appError("INTERNAL", "Unable to block those slots right now. Please try again.");
   }
 
   log.info("slots_blocked", {
-    locationId: input.locationId.toHexString(),
+    resourceId: input.resourceId.toHexString(),
     date: input.date,
     startMin: input.startMin,
     endMin: input.endMin,
@@ -1157,7 +1469,7 @@ export async function blockSlots(input: {
 }
 
 export async function unblockSlots(input: {
-  locationId: ObjectId;
+  resourceId: ObjectId;
   date: string;
   startMin: number;
   endMin: number;
@@ -1165,7 +1477,7 @@ export async function unblockSlots(input: {
   const db = await getDb();
   const result = await collections.slotUnits(db).updateMany(
     {
-      locationId: input.locationId,
+      resourceId: input.resourceId,
       date: input.date,
       startMin: { $gte: input.startMin, $lt: input.endMin },
       status: "BLOCKED",
@@ -1184,11 +1496,11 @@ export async function unblockSlots(input: {
 }
 
 /**
- * Close a whole location for a date with ONE document rather than materialising
+ * Close a resource for a whole date with ONE document rather than materialising
  * every slot. The availability query consults it, so it cannot be bypassed.
  */
 export async function blockDay(input: {
-  locationId: ObjectId;
+  resourceId: ObjectId;
   date: string;
   reason: string;
   force: boolean;
@@ -1198,9 +1510,9 @@ export async function blockDay(input: {
   const now = input.now ?? new Date();
   assertNotPast(input.date, now);
   const db = await getDb();
-  const { config } = await loadLocationContext(db, input.locationId, false);
+  const { resource, config } = await loadResourceContext(db, input.resourceId, false);
 
-  const conflicts = await findBlockConflicts(input.locationId, input.date, config.openMin, config.closeMin, now);
+  const conflicts = await findBlockConflicts(input.resourceId, input.date, config.openMin, config.closeMin, now);
   const confirmed = conflicts.filter((c) => c.status === "BOOKED");
   if (confirmed.length > 0) {
     throw appError(
@@ -1212,10 +1524,16 @@ export async function blockDay(input: {
   if (conflicts.length > 0 && !input.force) return { blocked: 0, conflicts };
 
   await collections.dayBlocks(db).updateOne(
-    { locationId: input.locationId, date: input.date },
+    { resourceId: input.resourceId, date: input.date },
     {
-      $set: { reason: input.reason, blockedBy: input.admin.username, blockedAt: now },
-      $setOnInsert: { locationId: input.locationId, date: input.date },
+      $set: {
+        locationId: resource.locationId,
+        facilityId: resource.facilityId,
+        reason: input.reason,
+        blockedBy: input.admin.username,
+        blockedAt: now,
+      },
+      $setOnInsert: { resourceId: input.resourceId, date: input.date },
     },
     { upsert: true },
   );
@@ -1232,7 +1550,7 @@ export async function blockDay(input: {
       );
     }
     await collections.slotUnits(db).updateMany(
-      { locationId: input.locationId, date: input.date, status: { $in: ["HELD", "PENDING"] } },
+      { resourceId: input.resourceId, date: input.date, status: { $in: ["HELD", "PENDING"] } },
       {
         $set: {
           status: "AVAILABLE",
@@ -1245,14 +1563,40 @@ export async function blockDay(input: {
     );
   }
 
-  log.info("day_blocked", { locationId: input.locationId.toHexString(), date: input.date, forced: input.force });
+  log.info("day_blocked", { resourceId: input.resourceId.toHexString(), date: input.date, forced: input.force });
   return { blocked: 1, conflicts: input.force ? conflicts : [] };
 }
 
-export async function unblockDay(locationId: ObjectId, date: string): Promise<boolean> {
+export async function unblockDay(resourceId: ObjectId, date: string): Promise<boolean> {
   const db = await getDb();
-  const result = await collections.dayBlocks(db).deleteOne({ locationId, date });
+  const result = await collections.dayBlocks(db).deleteOne({ resourceId, date });
   return result.deletedCount > 0;
+}
+
+/**
+ * Every resource a block should cover, for admins working at facility or ground
+ * level: "close Medipally on Sunday" means the box, the nets and the machine,
+ * and "close pickleball" means both courts. Each one is still blocked by its own
+ * per-resource document, so the availability path never learns about scopes.
+ */
+export async function resolveBlockTargets(input: {
+  resourceId?: ObjectId;
+  facilityId?: ObjectId;
+  locationId?: ObjectId;
+}): Promise<ObjectId[]> {
+  if (input.resourceId) return [input.resourceId];
+
+  const db = await getDb();
+  const filter = input.facilityId
+    ? { facilityId: input.facilityId }
+    : input.locationId
+      ? { locationId: input.locationId }
+      : null;
+  if (!filter) throw appError("VALIDATION", "Choose what to block.");
+
+  const resources = await collections.resources(db).find(filter).sort({ sortOrder: 1 }).toArray();
+  if (resources.length === 0) throw appError("NOT_FOUND", "There is nothing bookable there to block.");
+  return resources.map((r) => r._id);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────

@@ -14,6 +14,20 @@ export type BookingStatus = "PENDING" | "CONFIRMED" | "REJECTED" | "CANCELLED" |
  */
 export type PaymentStatus = "PENDING" | "PARTIAL" | "VERIFIED" | "REJECTED";
 
+/**
+ * How a facility is sold.
+ *
+ *  HOURLY — the customer picks a time range off the grid and pays per slot.
+ *           Box cricket, nets, pickleball courts.
+ *  OVERS  — the customer picks a number of overs and a ball type. The overs map
+ *           to a duration, the duration to consecutive 15-minute units, and the
+ *           ball type carries the price. Bowling machines.
+ *
+ * Both sell the SAME atomic units underneath, so the concurrency guarantees are
+ * identical; only the way a customer expresses what they want differs.
+ */
+export type FacilityKind = "HOURLY" | "OVERS";
+
 /** One screenshot the customer sent. A booking may collect several. */
 export interface PaymentAttempt {
   id: string;
@@ -43,6 +57,8 @@ export interface LocationDoc {
   name: string;
   slug: string;
   address: string;
+  /** Google Maps link shown to customers. Empty until the owner supplies one. */
+  mapsUrl: string;
   description: string;
   image: string;
   phone: string;
@@ -58,25 +74,107 @@ export interface PriceRule {
   price: number;
 }
 
-export interface SlotConfigDoc {
-  _id: ObjectId;
-  locationId: ObjectId;
-  /** Length of one atomic unit, minutes. */
+/**
+ * A ball type and what one slot of it costs.
+ *
+ * One slot is {@link FacilityConfig.oversPerSlot} overs — ten, at present — so
+ * this is the owner's "₹180 for 10 overs" verbatim. A longer session is that
+ * price per block: 20 overs is two slots and twice the money, 50 overs is five.
+ * Nothing is pro-rated by the clock, because the owner does not sell by the clock.
+ */
+export interface BallType {
+  id: string;
+  name: string;
+  pricePerSlot: number;
+}
+
+/**
+ * Hours, pricing and booking rules for one facility.
+ *
+ * Lives on the facility rather than the location because a location can sell
+ * several different things: Medipally's nets and its bowling machine keep
+ * separate hours, separate prices and separate availability. Pickleball's two
+ * courts share one facility and therefore one set of hours, edited once.
+ */
+export interface FacilityConfig {
+  /** Length of one atomic unit, minutes. 60 for hourly play, 15 for bowling. */
   slotMinutes: number;
   /** Operating window, IST minutes-of-day, half-open [openMin, closeMin). */
   openMin: number;
   closeMin: number;
+  /**
+   * HOURLY: what each slot costs, by time of day.
+   * OVERS: a single rule spanning the operating window at price 0 — the ball
+   * type carries the real price. Maintained server-side so it cannot drift.
+   */
   priceRules: PriceRule[];
   /** How many days ahead customers may book (0 = today only). */
   bookingWindowDays: number;
   /** Temporary hold lifetime, minutes. */
   holdMinutes: number;
+  /**
+   * OVERS only: how many overs one slot buys. Ten overs to a 15-minute slot.
+   *
+   * This single number is the whole overs rule. Duration is (overs / this) slots,
+   * and so is the price, which is why there is no separate ladder to keep in step
+   * with the clock and no ceiling written into the code: a customer may ask for
+   * 70 overs and get seven slots at seven times the block price.
+   */
+  oversPerSlot: number;
+  /**
+   * OVERS only: the largest session that may be booked WITHOUT paying online.
+   *
+   * At or below this the customer is confirmed on the spot and pays at the ground,
+   * because chasing a screenshot for a short net session costs the owner more
+   * goodwill than it protects. Above it, an online payment is required first.
+   * Zero means every session must pay online.
+   */
+  payAtVenueMaxOvers: number;
+  /** OVERS only. Empty for HOURLY facilities. */
+  ballTypes: BallType[];
+}
+
+export interface FacilityDoc {
+  _id: ObjectId;
+  locationId: ObjectId;
+  name: string;
+  slug: string;
+  kind: FacilityKind;
+  description: string;
+  sortOrder: number;
+  active: boolean;
+  config: FacilityConfig;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * One independently bookable thing: a turf, a net, a machine, a court.
+ *
+ * This — not the location and not the facility — is what slot units are keyed
+ * on. Pickleball Court 1 and Court 2 are two resources, so 6–7 PM on one has
+ * nothing to do with 6–7 PM on the other, and neither can be double booked,
+ * without a single line of court-specific logic.
+ */
+export interface ResourceDoc {
+  _id: ObjectId;
+  locationId: ObjectId;
+  facilityId: ObjectId;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  active: boolean;
+  createdAt: Date;
   updatedAt: Date;
 }
 
 export interface SlotUnitDoc {
   _id: ObjectId;
+  /** The bookable thing. Unique with (date, startMin) — the double-booking guard. */
+  resourceId: ObjectId;
+  /** Denormalised so admin screens can filter without joining. */
   locationId: ObjectId;
+  facilityId: ObjectId;
   /** Business date, IST, "YYYY-MM-DD". */
   date: string;
   /** Half-open interval [startMin, endMin) in IST minutes-of-day. */
@@ -89,6 +187,16 @@ export interface SlotUnitDoc {
   bookingId: ObjectId | null;
   /** Unit price captured when the unit was taken. */
   price: number;
+  /** OVERS facilities: which ball the hold was priced for. Null elsewhere. */
+  ballTypeId: string | null;
+  /**
+   * OVERS facilities: the overs the customer actually asked for.
+   *
+   * Recorded rather than re-derived from the duration, because the two disagree
+   * if the owner changes overs-per-slot mid-booking, and the customer must get
+   * what they were quoted.
+   */
+  overs: number | null;
   blockReason: string | null;
   blockedBy: string | null;
   blockedAt: Date | null;
@@ -98,7 +206,10 @@ export interface SlotUnitDoc {
 
 export interface DayBlockDoc {
   _id: ObjectId;
+  /** Blocks are per resource: closing one court leaves the other open. */
+  resourceId: ObjectId;
   locationId: ObjectId;
+  facilityId: ObjectId;
   date: string;
   reason: string;
   blockedBy: string;
@@ -115,20 +226,38 @@ export interface BookingTimelineEntry {
 export interface BookingDoc {
   _id: ObjectId;
   reference: string;
+  resourceId: ObjectId;
+  facilityId: ObjectId;
   locationId: ObjectId;
-  /** Snapshot: a location rename must not rewrite history. */
+  /** Snapshots: a rename must not rewrite history. */
   locationName: string;
+  facilityName: string;
+  resourceName: string;
   date: string;
   startMin: number;
   endMin: number;
   /** Start minute of every atomic unit this booking owns. */
   unitStarts: number[];
+  /** OVERS bookings only: what the customer actually bought. */
+  overs: number | null;
+  ballTypeName: string | null;
+  /**
+   * Confirmed on the spot, with the money to be collected at the ground.
+   *
+   * Short bowling sessions skip the online payment entirely, so such a booking is
+   * CONFIRMED while its payment is still PENDING — a combination that is normally
+   * impossible. This flag is what tells the admin screen the difference between
+   * "they owe us and are coming" and "something went wrong".
+   */
+  payAtVenue: boolean;
   /** Price snapshot — never recomputed after creation. */
   amount: number;
   priceBreakdown: Array<{ startMin: number; endMin: number; price: number }>;
   customerName: string;
   /** Normalised to 10 digits, no country code. */
   customerPhone: string;
+  /** True when an OTP was verified for this number at booking time. */
+  phoneVerified: boolean;
   status: BookingStatus;
   paymentVerificationStatus: PaymentStatus;
   /** Every screenshot sent for this booking, oldest first. Never overwritten. */
@@ -175,7 +304,38 @@ export interface SettingsDoc {
   upiId: string;
   upiPayeeName: string;
   upiQrImageUrl: string;
+  /**
+   * Mobile-number verification for customers, switchable without a deploy.
+   *
+   * Off means the booking flow never asks for a code and no SMS is ever sent,
+   * which is what keeps the bill at zero until the owner has an SMS account.
+   */
+  otpEnabled: boolean;
+  /** Where "new booking" alerts go. Falls back to supportPhone when blank. */
+  notifyPhone: string;
+  /** Send an SMS to notifyPhone whenever a booking comes in. */
+  notifyOnNewBooking: boolean;
   updatedAt: Date;
+}
+
+/**
+ * One outstanding mobile-verification challenge, keyed by phone number.
+ *
+ * The code itself is never stored — only its hash — so a database dump cannot be
+ * replayed into somebody's booking. Documents delete themselves via the TTL index
+ * on `expiresAt`.
+ */
+export interface OtpChallengeDoc {
+  _id: string;
+  codeHash: string;
+  expiresAt: Date;
+  /** Wrong guesses so far. The challenge dies after a handful. */
+  attempts: number;
+  /** Codes sent for this number inside the current window, for resend limits. */
+  sends: number;
+  /** Earliest moment another code may be sent. */
+  resendAfter: Date;
+  createdAt: Date;
 }
 
 export interface RateLimitDoc {

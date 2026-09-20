@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildDayTemplate, priceForStart, resolveUnits, totalPrice } from "../src/lib/booking/schedule";
+import {
+  applyBallPricing,
+  buildDayTemplate,
+  minutesForOvers,
+  oversLadder,
+  priceForStart,
+  resolveUnits,
+  runIsFree,
+  slotsForOvers,
+  totalPrice,
+} from "../src/lib/booking/schedule";
 import { generateBookingReference, generateHoldToken, hashHoldToken } from "../src/lib/booking/reference";
 
 const CONFIG = {
@@ -109,5 +119,101 @@ describe("identifiers", () => {
     assert.notEqual(hashHoldToken(token), token);
     assert.equal(hashHoldToken(token), hashHoldToken(token));
     assert.notEqual(hashHoldToken(token), hashHoldToken(generateHoldToken()));
+  });
+});
+
+/* ── The overs/quarter-hour arithmetic behind the bowling grid ───────────── */
+
+describe("overs and duration", () => {
+  it("turns whole blocks of overs into slots", () => {
+    assert.equal(slotsForOvers(10, 10), 1);
+    assert.equal(slotsForOvers(10, 40), 4);
+    assert.equal(slotsForOvers(10, 70), 7);
+    assert.equal(slotsForOvers(10, 200), 20);
+  });
+
+  /**
+   * The owner wants no ceiling, so there is none here — 500 overs resolves
+   * perfectly well and is only refused later, by the clock, when its slots run
+   * past closing time.
+   */
+  it("puts no upper limit on a session", () => {
+    assert.equal(slotsForOvers(10, 500), 50);
+  });
+
+  /** Half a block cannot be reserved, so it is not a bookable amount. */
+  it("refuses overs that are not a whole number of blocks", () => {
+    for (const overs of [0, 5, 15, 25, 33, -10, 10.5]) {
+      assert.equal(slotsForOvers(10, overs), null, `${overs} overs must not resolve`);
+    }
+  });
+
+  it("converts overs to minutes on the machine", () => {
+    assert.equal(minutesForOvers(10, 15, 10), 15);
+    assert.equal(minutesForOvers(10, 15, 40), 60);
+    assert.equal(minutesForOvers(10, 15, 70), 105);
+    assert.equal(minutesForOvers(10, 15, 25), null);
+  });
+
+  it("generates a ladder limited only by the length of the day", () => {
+    // 6 AM to 11 PM in quarter-hours is 68 blocks.
+    const ladder = oversLadder(10, 15, 6 * 60, 23 * 60);
+    assert.deepEqual(ladder.slice(0, 4), [10, 20, 30, 40]);
+    assert.equal(ladder.at(-1), 680);
+  });
+});
+
+describe("ball pricing", () => {
+  const synthetic = { id: "synthetic", name: "Synthetic", pricePerSlot: 180 };
+
+  /**
+   * The owner's words: ₹180 for 10 overs, ₹360 for 20. Each block costs one ball
+   * price, and nothing is pro-rated by the clock.
+   */
+  it("charges one ball price per block", () => {
+    const units = [
+      { startMin: 1080, endMin: 1095, price: 0 },
+      { startMin: 1095, endMin: 1110, price: 0 },
+    ];
+    const priced = applyBallPricing(units, synthetic);
+    assert.deepEqual(priced.map((u) => u.price), [180, 180]);
+    assert.equal(totalPrice(priced), 360, "20 overs is two blocks at 180");
+  });
+
+  it("scales with the number of blocks, with no rounding to go wrong", () => {
+    const units = Array.from({ length: 7 }, (_, i) => ({
+      startMin: 1080 + i * 15,
+      endMin: 1095 + i * 15,
+      price: 0,
+    }));
+    assert.equal(totalPrice(applyBallPricing(units, synthetic)), 1260, "70 overs is seven blocks");
+  });
+});
+
+describe("whether a session fits at a start time", () => {
+  const free = (...starts: number[]) => new Set(starts);
+
+  it("accepts a run that is entirely free", () => {
+    assert.equal(runIsFree(15, free(1080, 1095, 1110, 1125), 1080, 4), true);
+  });
+
+  /**
+   * The case the grid exists to show: 6:00 is free, but 6:30 is not, so a
+   * customer may start a 10 or 20 over session there and nothing longer.
+   */
+  it("refuses a run that crosses a taken quarter", () => {
+    const starts = free(1080, 1095, 1125); // 6:30 missing
+    assert.equal(runIsFree(15, starts, 1080, 2), true);
+    assert.equal(runIsFree(15, starts, 1080, 3), false);
+    assert.equal(runIsFree(15, starts, 1080, 4), false);
+  });
+
+  it("refuses anything from a quarter that is itself taken", () => {
+    assert.equal(runIsFree(15, free(1095, 1110), 1080, 1), false);
+  });
+
+  it("refuses a run that would continue past the end of the day", () => {
+    assert.equal(runIsFree(15, free(1365), 1365, 1), true);
+    assert.equal(runIsFree(15, free(1365), 1365, 2), false);
   });
 });

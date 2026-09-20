@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getSettings } from "@/lib/settings";
+import { smsConfigured } from "@/lib/sms";
 import { SettingsForm } from "@/components/admin/settings-form";
 
 export const dynamic = "force-dynamic";
@@ -13,10 +14,11 @@ export default async function AdminSettingsPage() {
     <div className="mx-auto max-w-3xl space-y-4">
       <div>
         <h1 className="text-xl font-bold text-ink-900">Settings</h1>
-        <p className="text-sm text-ink-600">Business details and UPI payment information.</p>
+        <p className="text-sm text-ink-600">Business details, UPI payment information and SMS.</p>
       </div>
 
       <SettingsForm
+        smsReady={smsConfigured()}
         initial={{
           businessName: settings.businessName,
           supportPhone: settings.supportPhone,
@@ -24,6 +26,9 @@ export default async function AdminSettingsPage() {
           upiId: settings.upiId,
           upiPayeeName: settings.upiPayeeName,
           upiQrImageUrl: settings.upiQrImageUrl,
+          otpEnabled: settings.otpEnabled,
+          notifyPhone: settings.notifyPhone,
+          notifyOnNewBooking: settings.notifyOnNewBooking,
         }}
       />
     </div>

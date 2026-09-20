@@ -1,12 +1,35 @@
 import { cookies } from "next/headers";
 import { fail, HOLD_COOKIE, ok, readJson } from "@/lib/api";
-import { createHold, getHold, releaseHold } from "@/lib/booking/service";
+import { createHold, getHold, releaseHold, type HoldResult, type HoldSnapshot } from "@/lib/booking/service";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { holdRequestSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 const HOLD_COOKIE_MAX_AGE = 60 * 60; // outlives the hold itself so expiry can be explained
+
+/** One shape for both a fresh hold and a recovered one, so the client has one parser. */
+function publicHold(hold: HoldResult | HoldSnapshot) {
+  return {
+    holdUntil: hold.holdUntil.toISOString(),
+    resourceId: hold.resourceId,
+    resourceName: hold.resourceName,
+    facilityName: hold.facilityName,
+    facilityKind: hold.facilityKind,
+    locationId: hold.locationId,
+    locationName: hold.locationName,
+    date: hold.date,
+    startMin: hold.startMin,
+    endMin: hold.endMin,
+    overs: hold.overs,
+    ballTypeName: hold.ballTypeName,
+    // Drives whether the customer is shown a payment step at all, so it has to
+    // travel with the hold rather than being worked out again in the browser.
+    payAtVenue: hold.payAtVenue,
+    amount: hold.amount,
+    breakdown: hold.breakdown,
+  };
+}
 
 /**
  * Reserve a slot range. The raw hold token is returned once and also stored in an
@@ -35,16 +58,7 @@ export async function POST(request: Request) {
       maxAge: HOLD_COOKIE_MAX_AGE,
     });
 
-    return ok({
-      holdUntil: hold.holdUntil.toISOString(),
-      locationId: hold.locationId,
-      locationName: hold.locationName,
-      date: hold.date,
-      startMin: hold.startMin,
-      endMin: hold.endMin,
-      amount: hold.amount,
-      breakdown: hold.breakdown,
-    });
+    return ok(publicHold(hold));
   } catch (err) {
     return fail(err, { route: "POST /api/holds" });
   }
@@ -60,17 +74,7 @@ export async function GET() {
     if (!hold) return ok({ hold: null });
 
     return ok({
-      hold: {
-        holdUntil: hold.holdUntil.toISOString(),
-        locationId: hold.locationId,
-        locationName: hold.locationName,
-        date: hold.date,
-        startMin: hold.startMin,
-        endMin: hold.endMin,
-        amount: hold.amount,
-        breakdown: hold.breakdown,
-        submittedBookingReference: hold.submittedBookingReference,
-      },
+      hold: { ...publicHold(hold), submittedBookingReference: hold.submittedBookingReference },
     });
   } catch (err) {
     return fail(err, { route: "GET /api/holds" });

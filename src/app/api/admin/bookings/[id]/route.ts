@@ -28,6 +28,15 @@ function serialise(b: BookingDoc) {
     reference: b.reference,
     locationId: b.locationId.toHexString(),
     locationName: b.locationName,
+    // The same snapshots the list sends. Without them a drawer rendered from this
+    // response cannot say which court the customer booked, or how many overs.
+    facilityName: b.facilityName ?? "",
+    resourceName: b.resourceName ?? "",
+    overs: b.overs ?? null,
+    ballTypeName: b.ballTypeName ?? null,
+    phoneVerified: Boolean(b.phoneVerified),
+    /** Confirmed without paying online: the money is due at the gate. */
+    payAtVenue: Boolean(b.payAtVenue),
     date: b.date,
     startMin: b.startMin,
     endMin: b.endMin,

@@ -1,7 +1,6 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { recordAudit, requireAdmin } from "@/lib/auth";
-import { DEFAULT_SLOT_CONFIG } from "@/lib/booking/service";
 import { collections, getDb, isDuplicateKeyError } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { locationCreateSchema } from "@/lib/validation";
@@ -20,6 +19,7 @@ export async function GET() {
         name: l.name,
         slug: l.slug,
         address: l.address,
+        mapsUrl: l.mapsUrl ?? "",
         description: l.description,
         image: l.image,
         phone: l.phone,
@@ -47,14 +47,10 @@ export async function POST(request: Request) {
       throw err;
     }
 
-    // A new location starts on the default schedule so it is bookable immediately.
-    await collections.slotConfigs(db).insertOne({
-      _id: new ObjectId(),
-      locationId: _id,
-      ...DEFAULT_SLOT_CONFIG,
-      updatedAt: now,
-    });
-
+    // No facility is created here: what a ground sells differs per ground, so the
+    // owner adds the box, the nets or the courts themselves. Until they do, the
+    // location has nothing bookable and is hidden from customers rather than
+    // offered as an empty page.
     await recordAudit(admin, "LOCATION_CREATED", "location", _id.toHexString(), { name: input.name });
     return ok({ id: _id.toHexString() });
   } catch (err) {

@@ -15,11 +15,13 @@ export default async function AdminLocationsPage() {
     <div className="mx-auto max-w-4xl space-y-4">
       <div>
         <h1 className="text-xl font-bold text-ink-900">Locations</h1>
-        <p className="text-sm text-ink-600">Details, operating hours and pricing for each ground.</p>
+        <p className="text-sm text-ink-600">
+          Grounds, what each one sells, and the hours and prices for every facility.
+        </p>
       </div>
 
       {locations.length === 0 ? (
-        <EmptyState title="No locations yet." hint="Run the seed script to create the three grounds." />
+        <EmptyState title="No locations yet." hint="Run the seed script to create the grounds." />
       ) : (
         <LocationsManager
           initialLocations={locations.map((l) => ({
@@ -27,6 +29,7 @@ export default async function AdminLocationsPage() {
             name: l.name,
             slug: l.slug,
             address: l.address,
+            mapsUrl: l.mapsUrl ?? "",
             description: l.description,
             image: l.image,
             phone: l.phone,

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
-import { formatMinutes } from "@/lib/time";
+import { formatMinutes, minutesToDuration } from "@/lib/time";
 import { Alert, Button, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
 interface AdminLocation {
@@ -11,6 +11,7 @@ interface AdminLocation {
   name: string;
   slug: string;
   address: string;
+  mapsUrl: string;
   description: string;
   image: string;
   phone: string;
@@ -23,26 +24,86 @@ interface PriceRule {
   price: number;
 }
 
-interface SlotConfig {
+interface BallType {
+  id: string;
+  name: string;
+  /** What one block of overs costs — "₹180 for 10 overs". */
+  pricePerSlot: number;
+}
+
+interface FacilityConfig {
   slotMinutes: number;
   openMin: number;
   closeMin: number;
   priceRules: PriceRule[];
   bookingWindowDays: number;
   holdMinutes: number;
+  oversPerSlot: number;
+  payAtVenueMaxOvers: number;
+  ballTypes: BallType[];
+}
+
+interface AdminFacility {
+  id: string;
+  locationId: string;
+  name: string;
+  slug: string;
+  kind: "HOURLY" | "OVERS";
+  description: string;
+  sortOrder: number;
+  active: boolean;
+  config: FacilityConfig;
+}
+
+interface AdminResource {
+  id: string;
+  locationId: string;
+  facilityId: string;
+  name: string;
+  slug: string;
+  sortOrder: number;
+  active: boolean;
+}
+
+interface Tree {
+  facilities: AdminFacility[];
+  resources: AdminResource[];
 }
 
 const HOURS = Array.from({ length: 25 }, (_, i) => i * 60);
 
+/** "Bowling Machine" → "bowling-machine", for the slug fields. */
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
 export function LocationsManager({ initialLocations }: { initialLocations: AdminLocation[] }) {
   const [locations, setLocations] = React.useState(initialLocations);
   const [selectedId, setSelectedId] = React.useState(initialLocations[0]?.id ?? "");
+  const [tree, setTree] = React.useState<Tree>({ facilities: [], resources: [] });
   const [notice, setNotice] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   const selected = locations.find((l) => l.id === selectedId);
 
-  async function refresh() {
+  const refreshTree = React.useCallback(async () => {
+    try {
+      const data = await api<Tree>("/api/admin/facilities");
+      setTree({ facilities: data.facilities, resources: data.resources });
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshTree();
+  }, [refreshTree]);
+
+  async function refreshLocations() {
     const data = await api<{ locations: AdminLocation[] }>("/api/admin/locations");
     setLocations(data.locations);
   }
@@ -59,7 +120,7 @@ export function LocationsManager({ initialLocations }: { initialLocations: Admin
           ? `${location.name} is now hidden from customers. Existing bookings are unaffected.`
           : `${location.name} is accepting bookings again.`,
       );
-      await refresh();
+      await refreshLocations();
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -80,29 +141,34 @@ export function LocationsManager({ initialLocations }: { initialLocations: Admin
       <section className="card">
         <h2 className="font-semibold text-ink-900">Locations</h2>
         <ul className="mt-3 divide-y divide-ink-100">
-          {locations.map((l) => (
-            <li key={l.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-              <button type="button" className="min-w-0 flex-1 py-1 text-left" onClick={() => setSelectedId(l.id)}>
-                <span className={cn("block truncate font-medium", selectedId === l.id ? "text-pitch-700" : "text-ink-900")}>
-                  {l.name}
-                </span>
-                <span className="mt-0.5 block truncate text-sm text-ink-500">{l.address}</span>
-              </button>
-              <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
-                <span
-                  className={cn(
-                    "rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
-                    l.active ? "bg-green-50 text-green-800 ring-green-600/30" : "bg-ink-100 text-ink-600 ring-ink-300",
-                  )}
-                >
-                  {l.active ? "Active" : "Hidden"}
-                </span>
-                <Button size="sm" variant="secondary" className="h-11 sm:h-9" onClick={() => void toggleActive(l)}>
-                  {l.active ? "Deactivate" : "Activate"}
-                </Button>
-              </div>
-            </li>
-          ))}
+          {locations.map((l) => {
+            const count = tree.facilities.filter((f) => f.locationId === l.id).length;
+            return (
+              <li key={l.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <button type="button" className="min-w-0 flex-1 py-1 text-left" onClick={() => setSelectedId(l.id)}>
+                  <span className={cn("block truncate font-medium", selectedId === l.id ? "text-pitch-700" : "text-ink-900")}>
+                    {l.name}
+                  </span>
+                  <span className="mt-0.5 block truncate text-sm text-ink-500">
+                    {count} facilit{count === 1 ? "y" : "ies"} · {l.address}
+                  </span>
+                </button>
+                <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
+                      l.active ? "bg-green-50 text-green-800 ring-green-600/30" : "bg-ink-100 text-ink-600 ring-ink-300",
+                    )}
+                  >
+                    {l.active ? "Active" : "Hidden"}
+                  </span>
+                  <Button size="sm" variant="secondary" className="h-11 sm:h-9" onClick={() => void toggleActive(l)}>
+                    {l.active ? "Deactivate" : "Activate"}
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       </section>
 
@@ -127,13 +193,21 @@ export function LocationsManager({ initialLocations }: { initialLocations: Admin
             ))}
           </select>
           <p className="mt-1.5 text-xs text-ink-500">
-            Details, hours and pricing below apply to this ground only.
+            Details, facilities and pricing below apply to this ground only.
           </p>
         </section>
       ) : null}
 
-      {selected ? <LocationEditor key={selected.id} location={selected} onSaved={refresh} /> : null}
-      {selected ? <ScheduleEditor key={selected.id} locationId={selected.id} locationName={selected.name} /> : null}
+      {selected ? <LocationEditor key={selected.id} location={selected} onSaved={refreshLocations} /> : null}
+      {selected ? (
+        <FacilitiesManager
+          key={selected.id}
+          location={selected}
+          facilities={tree.facilities.filter((f) => f.locationId === selected.id)}
+          resources={tree.resources}
+          onChanged={refreshTree}
+        />
+      ) : null}
     </div>
   );
 }
@@ -153,6 +227,7 @@ function LocationEditor({ location, onSaved }: { location: AdminLocation; onSave
         body: JSON.stringify({
           name: form.name,
           address: form.address,
+          mapsUrl: form.mapsUrl,
           description: form.description,
           image: form.image,
           phone: form.phone,
@@ -178,6 +253,14 @@ function LocationEditor({ location, onSaved }: { location: AdminLocation; onSave
           <Text label="Address" value={form.address} onChange={(address) => setForm({ ...form, address })} />
         </div>
         <div className="sm:col-span-2">
+          <Text
+            label="Google Maps link"
+            value={form.mapsUrl}
+            onChange={(mapsUrl) => setForm({ ...form, mapsUrl })}
+            hint="Open the ground in Google Maps, tap Share and paste the link. Leave blank to search by name."
+          />
+        </div>
+        <div className="sm:col-span-2">
           <Text label="Description" value={form.description} onChange={(description) => setForm({ ...form, description })} />
         </div>
         <div className="sm:col-span-2">
@@ -193,33 +276,57 @@ function LocationEditor({ location, onSaved }: { location: AdminLocation; onSave
   );
 }
 
-function ScheduleEditor({ locationId, locationName }: { locationId: string; locationName: string }) {
-  const [config, setConfig] = React.useState<SlotConfig | null>(null);
-  const [loading, setLoading] = React.useState(true);
+/**
+ * What this ground sells, and what is bookable under each of those.
+ *
+ * The two levels are deliberately visible to the owner rather than hidden behind
+ * one flat list: "Pickleball" is one thing they price and open, while "Court 1"
+ * and "Court 2" are two things that can be booked at the same hour, and the
+ * difference is exactly what they need to be able to see.
+ */
+function FacilitiesManager({
+  location,
+  facilities,
+  resources,
+  onChanged,
+}: {
+  location: AdminLocation;
+  facilities: AdminFacility[];
+  resources: AdminResource[];
+  onChanged: () => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = React.useState(facilities[0]?.id ?? "");
+  const [adding, setAdding] = React.useState(false);
+  const [newName, setNewName] = React.useState("");
+  const [newKind, setNewKind] = React.useState<"HOURLY" | "OVERS">("HOURLY");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [saved, setSaved] = React.useState(false);
 
   React.useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    void api<{ config: SlotConfig }>(`/api/admin/config?locationId=${locationId}`)
-      .then((data) => !cancelled && setConfig(data.config))
-      .catch((err) => !cancelled && setError(errorMessage(err)))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [locationId]);
+    if (facilities.some((f) => f.id === selectedId)) return;
+    setSelectedId(facilities[0]?.id ?? "");
+  }, [facilities, selectedId]);
 
-  async function save() {
-    if (!config) return;
+  const selected = facilities.find((f) => f.id === selectedId);
+
+  async function addFacility() {
+    if (busy || newName.trim().length < 2) return;
     setBusy(true);
     setError(null);
     try {
-      await api(`/api/admin/locations/${locationId}`, { method: "PUT", body: JSON.stringify(config) });
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
+      await api("/api/admin/facilities", {
+        method: "POST",
+        body: JSON.stringify({
+          locationId: location.id,
+          name: newName.trim(),
+          slug: slugify(newName),
+          kind: newKind,
+          sortOrder: facilities.length,
+        }),
+      });
+      setNewName("");
+      setAdding(false);
+      await onChanged();
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -227,27 +334,251 @@ function ScheduleEditor({ locationId, locationName }: { locationId: string; loca
     }
   }
 
-  if (loading) {
-    return (
-      <section className="card">
-        <p className="flex items-center gap-2 text-sm text-ink-600">
-          <Spinner /> Loading schedule…
-        </p>
-      </section>
-    );
+  async function toggleFacility(facility: AdminFacility) {
+    setError(null);
+    try {
+      await api(`/api/admin/facilities/${facility.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: !facility.active }),
+      });
+      await onChanged();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
-  if (!config) return null;
 
-  const update = (patch: Partial<SlotConfig>) => setConfig({ ...config, ...patch });
+  return (
+    <>
+      <section className="card">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="break-words font-semibold text-ink-900">Facilities at {location.name}</h2>
+          <Button size="sm" variant="secondary" className="h-11 sm:h-9" onClick={() => setAdding((v) => !v)}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Add facility
+          </Button>
+        </div>
+
+        {facilities.length === 0 ? (
+          <p className="mt-3 text-sm text-ink-500">
+            Nothing here yet. Until a facility is added, this ground is hidden from customers.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-ink-100">
+            {facilities.map((f) => {
+              const own = resources.filter((r) => r.facilityId === f.id);
+              return (
+                <li key={f.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <button type="button" className="min-w-0 flex-1 py-1 text-left" onClick={() => setSelectedId(f.id)}>
+                    <span className={cn("block truncate font-medium", selectedId === f.id ? "text-pitch-700" : "text-ink-900")}>
+                      {f.name}
+                    </span>
+                    <span className="mt-0.5 block truncate text-sm text-ink-500">
+                      {f.kind === "OVERS" ? "By the over" : "By the hour"} · {own.length} bookable
+                      {own.length === 1 ? "" : " courts"}
+                    </span>
+                  </button>
+                  <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
+                        f.active ? "bg-green-50 text-green-800 ring-green-600/30" : "bg-ink-100 text-ink-600 ring-ink-300",
+                      )}
+                    >
+                      {f.active ? "Active" : "Hidden"}
+                    </span>
+                    <Button size="sm" variant="secondary" className="h-11 sm:h-9" onClick={() => void toggleFacility(f)}>
+                      {f.active ? "Hide" : "Show"}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {adding ? (
+          <div className="mt-4 grid gap-3 rounded-lg border border-ink-200 p-3 sm:grid-cols-[1fr,auto,auto] sm:items-end">
+            <Text label="Name" value={newName} onChange={setNewName} />
+            <div>
+              <label className="field-label" htmlFor="new-facility-kind">
+                Sold as
+              </label>
+              <select
+                id="new-facility-kind"
+                className="field-input"
+                value={newKind}
+                onChange={(e) => setNewKind(e.target.value as "HOURLY" | "OVERS")}
+              >
+                <option value="HOURLY">By the hour</option>
+                <option value="OVERS">By the over (bowling machine)</option>
+              </select>
+            </div>
+            <Button className="h-11 sm:h-[42px]" onClick={addFacility} disabled={busy || newName.trim().length < 2}>
+              {busy ? <Spinner /> : null}
+              Create
+            </Button>
+          </div>
+        ) : null}
+
+        {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
+      </section>
+
+      {facilities.length > 1 ? (
+        <section className="card">
+          <label className="field-label" htmlFor="editing-facility">
+            Editing facility
+          </label>
+          <select
+            id="editing-facility"
+            className="field-input"
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+          >
+            {facilities.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </section>
+      ) : null}
+
+      {selected ? (
+        <ResourcesEditor
+          key={`${selected.id}-resources`}
+          facility={selected}
+          resources={resources.filter((r) => r.facilityId === selected.id)}
+          onChanged={onChanged}
+        />
+      ) : null}
+      {selected ? <ScheduleEditor key={`${selected.id}-schedule`} facility={selected} onSaved={onChanged} /> : null}
+    </>
+  );
+}
+
+/** The individually bookable things: court 1, court 2, net 3. */
+function ResourcesEditor({
+  facility,
+  resources,
+  onChanged,
+}: {
+  facility: AdminFacility;
+  resources: AdminResource[];
+  onChanged: () => Promise<void>;
+}) {
+  const [newName, setNewName] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function add() {
+    if (busy || newName.trim().length < 1) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/api/admin/resources", {
+        method: "POST",
+        body: JSON.stringify({
+          facilityId: facility.id,
+          name: newName.trim(),
+          slug: slugify(`${facility.slug}-${newName}`),
+          sortOrder: resources.length,
+        }),
+      });
+      setNewName("");
+      await onChanged();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggle(resource: AdminResource) {
+    setError(null);
+    try {
+      await api(`/api/admin/resources/${resource.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: !resource.active }),
+      });
+      await onChanged();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
 
   return (
     <section className="card">
-      <h2 className="break-words font-semibold text-ink-900">Hours &amp; pricing · {locationName}</h2>
+      <h2 className="break-words font-semibold text-ink-900">Bookable courts · {facility.name}</h2>
+      <p className="mt-1 text-sm text-ink-600">
+        Each one is booked and blocked on its own. Two courts here means two customers can play at the same hour.
+      </p>
+
+      <ul className="mt-3 divide-y divide-ink-100">
+        {resources.map((r) => (
+          <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <span className="min-w-0 flex-1 truncate font-medium text-ink-900">{r.name}</span>
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
+                  r.active ? "bg-green-50 text-green-800 ring-green-600/30" : "bg-ink-100 text-ink-600 ring-ink-300",
+                )}
+              >
+                {r.active ? "Active" : "Hidden"}
+              </span>
+              <Button size="sm" variant="secondary" className="h-11 sm:h-9" onClick={() => void toggle(r)}>
+                {r.active ? "Hide" : "Show"}
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-[1fr,auto] sm:items-end">
+        <Text label="Add another (e.g. Court 2)" value={newName} onChange={setNewName} />
+        <Button className="h-11 sm:h-[42px]" onClick={add} disabled={busy || newName.trim().length < 1}>
+          {busy ? <Spinner /> : null}
+          Add
+        </Button>
+      </div>
+
+      {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
+    </section>
+  );
+}
+
+function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSaved: () => Promise<void> }) {
+  const [config, setConfig] = React.useState<FacilityConfig>(facility.config);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [saved, setSaved] = React.useState(false);
+
+  const isOvers = facility.kind === "OVERS";
+  const update = (patch: Partial<FacilityConfig>) => setConfig({ ...config, ...patch });
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/admin/facilities/${facility.id}`, { method: "PUT", body: JSON.stringify(config) });
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+      await onSaved();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <h2 className="break-words font-semibold text-ink-900">Hours &amp; pricing · {facility.name}</h2>
       <p className="mt-1 text-sm text-ink-600">
         Existing bookings keep the price they were charged. Changes only affect new bookings.
       </p>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div>
           <label className="field-label" htmlFor="open-min">
             Opens at
@@ -272,11 +603,10 @@ function ScheduleEditor({ locationId, locationName }: { locationId: string; loca
             ))}
           </select>
         </div>
-        {/* Slot length and hold duration are deliberately not editable here. Both
-            are load-bearing — slot length is the unit the double-booking index is
-            built on, and changing it against existing bookings would split or merge
-            the very rows that guarantee one booking per hour. They keep their saved
-            values, which are still sent on save. */}
+        {/* Slot length and hold duration are deliberately not editable here. Slot
+            length is the unit the double-booking index is built on — the server
+            refuses to change it under live bookings — and it is decided by how the
+            facility is sold: an hour for play, a quarter-hour for a machine. */}
         <div>
           <label className="field-label" htmlFor="window-days">
             Booking window (days ahead)
@@ -293,6 +623,31 @@ function ScheduleEditor({ locationId, locationName }: { locationId: string; loca
         </div>
       </div>
 
+      {isOvers ? (
+        <OversPricing config={config} update={update} />
+      ) : (
+        <HourlyPricing config={config} update={update} />
+      )}
+
+      {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
+
+      <Button className="mt-4 w-full sm:w-auto" onClick={save} disabled={busy}>
+        {busy ? <Spinner /> : null}
+        {busy ? "Saving…" : saved ? "Saved" : "Save schedule"}
+      </Button>
+    </section>
+  );
+}
+
+function HourlyPricing({
+  config,
+  update,
+}: {
+  config: FacilityConfig;
+  update: (patch: Partial<FacilityConfig>) => void;
+}) {
+  return (
+    <>
       <h3 className="mt-6 font-medium text-ink-900">Price bands</h3>
       <p className="mt-1 text-sm text-ink-600">
         A multi-hour booking costs the sum of its hours, so bands never need duplicating per duration.
@@ -399,18 +754,207 @@ function ScheduleEditor({ locationId, locationName }: { locationId: string; loca
         Example: a 2-hour evening booking would cost{" "}
         <strong>{formatCurrency((config.priceRules.at(-1)?.price ?? 0) * 2)}</strong>.
       </p>
-
-      {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
-
-      <Button className="mt-4 w-full sm:w-auto" onClick={save} disabled={busy}>
-        {busy ? <Spinner /> : null}
-        {busy ? "Saving…" : saved ? "Saved" : "Save schedule"}
-      </Button>
-    </section>
+    </>
   );
 }
 
-function Text({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+/**
+ * Bowling-machine pricing.
+ *
+ * The owner sells in blocks of overs — "₹180 for 10 overs" — so that is exactly
+ * what is typed in, and a longer session is that price per block. The table
+ * underneath shows what a customer actually pays, because that is the number the
+ * owner is really deciding.
+ */
+function OversPricing({
+  config,
+  update,
+}: {
+  config: FacilityConfig;
+  update: (patch: Partial<FacilityConfig>) => void;
+}) {
+  const block = config.oversPerSlot || 10;
+  /** A few blocks worth previewing; sessions are not capped at these. */
+  const preview = [1, 2, 3, 4, 5, 6].map((slots) => slots * block);
+  const priceFor = (ball: BallType, overs: number) => ball.pricePerSlot * (overs / block);
+
+  return (
+    <>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="field-label" htmlFor="overs-per-slot">
+            Overs per {config.slotMinutes}-minute block
+          </label>
+          <input
+            id="overs-per-slot"
+            type="number"
+            min={1}
+            max={100}
+            className="field-input"
+            value={config.oversPerSlot}
+            onChange={(e) => update({ oversPerSlot: Number(e.target.value) })}
+          />
+          <p className="mt-1.5 text-xs text-ink-500">
+            This is the whole overs rule. Customers book in multiples of it, and each block costs one ball price.
+          </p>
+        </div>
+        <div>
+          <label className="field-label" htmlFor="pay-at-venue">
+            Pay at the ground up to
+          </label>
+          <input
+            id="pay-at-venue"
+            type="number"
+            min={0}
+            step={block}
+            className="field-input"
+            value={config.payAtVenueMaxOvers}
+            onChange={(e) => update({ payAtVenueMaxOvers: Number(e.target.value) })}
+          />
+          <p className="mt-1.5 text-xs text-ink-500">
+            Sessions this size or smaller are confirmed instantly with no online payment — the customer pays you when
+            they arrive. Set 0 to always ask for payment first.
+          </p>
+        </div>
+      </div>
+
+      <h3 className="mt-6 font-medium text-ink-900">Ball types &amp; prices</h3>
+      <p className="mt-1 text-sm text-ink-600">
+        Price for one block of {block} overs. {block * 2} overs costs twice this, {block * 3} overs three times, and so
+        on — there is no upper limit beyond closing time.
+      </p>
+
+      <ul className="mt-3 space-y-3 sm:space-y-2">
+        {config.ballTypes.map((ball, index) => (
+          <li
+            key={index}
+            className="grid grid-cols-2 items-end gap-2 rounded-lg border border-ink-200 p-3 sm:grid-cols-[1fr,1fr,auto] sm:border-0 sm:p-0"
+          >
+            <div>
+              <label className="field-label text-xs" htmlFor={`ball-name-${index}`}>
+                Ball
+              </label>
+              <input
+                id={`ball-name-${index}`}
+                className="field-input"
+                value={ball.name}
+                onChange={(e) => {
+                  const balls = [...config.ballTypes];
+                  // The id is what a live hold points at, so renaming a ball must
+                  // never change it — an in-flight booking would lose its price.
+                  balls[index] = { ...ball, name: e.target.value };
+                  update({ ballTypes: balls });
+                }}
+              />
+            </div>
+            <div>
+              <label className="field-label text-xs" htmlFor={`ball-price-${index}`}>
+                Price per {block} overs
+              </label>
+              <input
+                id={`ball-price-${index}`}
+                type="number"
+                min={0}
+                className="field-input"
+                value={ball.pricePerSlot}
+                onChange={(e) => {
+                  const balls = [...config.ballTypes];
+                  balls[index] = { ...ball, pricePerSlot: Number(e.target.value) };
+                  update({ ballTypes: balls });
+                }}
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-11 w-11 justify-self-end sm:h-9 sm:w-auto"
+              aria-label={`Remove ${ball.name}`}
+              onClick={() => update({ ballTypes: config.ballTypes.filter((_, i) => i !== index) })}
+              disabled={config.ballTypes.length === 1}
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </li>
+        ))}
+      </ul>
+
+      <Button
+        variant="secondary"
+        size="sm"
+        className="mt-3 h-11 w-full sm:h-9 sm:w-auto"
+        onClick={() =>
+          update({
+            ballTypes: [
+              ...config.ballTypes,
+              { id: `ball-${config.ballTypes.length + 1}`, name: "New ball", pricePerSlot: 150 },
+            ],
+          })
+        }
+      >
+        <Plus className="h-4 w-4" aria-hidden="true" />
+        Add ball type
+      </Button>
+
+      {config.ballTypes.length > 0 ? (
+        <div className="mt-5 overflow-x-auto rounded-lg border border-ink-200">
+          <table className="w-full text-sm">
+            <caption className="px-3 pt-3 text-left text-xs font-medium text-ink-600">
+              What a customer will actually pay
+            </caption>
+            <thead>
+              <tr className="text-left text-xs text-ink-600">
+                <th scope="col" className="px-3 py-2 font-medium">Session</th>
+                {config.ballTypes.map((b, i) => (
+                  <th key={i} scope="col" className="px-3 py-2 font-medium">
+                    {b.name || "Ball"}
+                  </th>
+                ))}
+                <th scope="col" className="px-3 py-2 font-medium">Pay</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-100">
+              {preview.map((overs) => {
+                const minutes = (overs / block) * config.slotMinutes;
+                const atVenue = config.payAtVenueMaxOvers > 0 && overs <= config.payAtVenueMaxOvers;
+                return (
+                  <tr key={overs}>
+                    <th scope="row" className="whitespace-nowrap px-3 py-2 text-left font-medium text-ink-900">
+                      {overs} overs
+                      <span className="ml-1 font-normal text-ink-500">({minutesToDuration(minutes)})</span>
+                    </th>
+                    {config.ballTypes.map((b, j) => (
+                      <td key={j} className="whitespace-nowrap px-3 py-2 tabular-nums text-ink-800">
+                        {formatCurrency(priceFor(b, overs))}
+                      </td>
+                    ))}
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-ink-600">
+                      {atVenue ? "At the ground" : "Online first"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="px-3 pb-3 pt-1 text-xs text-ink-500">
+            Customers can book beyond this — as many blocks as the day has room for.
+          </p>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function Text({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+}) {
   const id = React.useId();
   return (
     <div>
@@ -418,6 +962,7 @@ function Text({ label, value, onChange }: { label: string; value: string; onChan
         {label}
       </label>
       <input id={id} className="field-input" value={value} onChange={(e) => onChange(e.target.value)} />
+      {hint ? <p className="mt-1.5 text-xs text-ink-500">{hint}</p> : null}
     </div>
   );
 }

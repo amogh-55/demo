@@ -15,11 +15,12 @@ import {
   Sparkles,
   Trophy,
 } from "lucide-react";
-import { DEFAULT_SLOT_CONFIG } from "@/lib/booking/service";
-import { collections, getDb } from "@/lib/db";
+import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
+import { getPublicCatalog } from "@/lib/catalog";
 import { getSettings } from "@/lib/settings";
 import { formatMinutes } from "@/lib/time";
 import { Button, formatCurrency } from "@/components/ui/primitives";
+import { GroundsShowcase } from "@/components/customer/grounds-showcase";
 import { SiteHeader, StickyBookBar } from "@/components/customer/site-chrome";
 import { TurfAssistant } from "@/components/customer/turf-assistant";
 import { whatsappUrl } from "@/lib/whatsapp";
@@ -35,15 +36,6 @@ const FACILITIES = [
   { icon: Dumbbell, title: "Gear on request", body: "Bats, balls, pads and gloves if you turn up empty-handed." },
 ];
 
-const GALLERY = [
-  { src: "/images/floodlight-turf.jpg", alt: "Floodlit turf at night", span: "sm:col-span-2 sm:row-span-2" },
-  { src: "/images/batsman-action.jpg", alt: "Batsman playing a shot", span: "" },
-  { src: "/images/ball-closeup.jpg", alt: "Cricket ball on the turf", span: "" },
-  { src: "/images/bowler-action.jpg", alt: "Bowler in delivery stride", span: "" },
-  { src: "/images/cricket-action-3.jpg", alt: "Players mid-match", span: "" },
-  { src: "/images/box-cricket-turf.jpg", alt: "Box cricket nets", span: "sm:col-span-2" },
-];
-
 const STEPS = [
   { icon: MapPin, title: "Pick your ground", body: "Choose the turf nearest you." },
   { icon: CalendarDays, title: "Choose date & time", body: "Live availability, by the hour." },
@@ -52,29 +44,31 @@ const STEPS = [
 ];
 
 export default async function HomePage() {
-  const db = await getDb();
-  const [locations, settings, configs] = await Promise.all([
-    collections.locations(db).find({ active: true }).sort({ name: 1 }).toArray(),
-    getSettings(),
-    collections.slotConfigs(db).find({}).toArray(),
-  ]);
+  const [locations, settings] = await Promise.all([getPublicCatalog(), getSettings()]);
 
   // Every headline number comes from the same configuration the booking engine
   // uses, so the marketing copy can never drift from what customers are charged.
-  const prices = configs.flatMap((c) => c.priceRules.map((r) => r.price));
-  const minPrice = prices.length ? Math.min(...prices) : DEFAULT_SLOT_CONFIG.priceRules[0]!.price;
-  const maxPrice = prices.length ? Math.max(...prices) : DEFAULT_SLOT_CONFIG.priceRules.at(-1)!.price;
-  const openMin = configs.length ? Math.min(...configs.map((c) => c.openMin)) : DEFAULT_SLOT_CONFIG.openMin;
-  const closeMin = configs.length ? Math.max(...configs.map((c) => c.closeMin)) : DEFAULT_SLOT_CONFIG.closeMin;
-  const holdMinutes = configs.length ? Math.min(...configs.map((c) => c.holdMinutes)) : DEFAULT_SLOT_CONFIG.holdMinutes;
-  const bookingWindowDays = configs.length
-    ? Math.max(...configs.map((c) => c.bookingWindowDays))
-    : DEFAULT_SLOT_CONFIG.bookingWindowDays;
+  const facilities = locations.flatMap((l) => l.facilities);
+  const hourlyPrices = facilities.map((f) => f.fromPrice).filter((p): p is number => p !== null);
+  const ballPrices = facilities.map((f) => f.fromPricePerBlock).filter((p): p is number => p !== null);
+  const prices = [...hourlyPrices, ...ballPrices];
+  const minPrice = prices.length ? Math.min(...prices) : DEFAULT_HOURLY_CONFIG.priceRules[0]!.price;
+  const maxPrice = prices.length ? Math.max(...prices) : DEFAULT_HOURLY_CONFIG.priceRules.at(-1)!.price;
+  const openMin = facilities.length ? Math.min(...facilities.map((f) => f.openMin)) : DEFAULT_HOURLY_CONFIG.openMin;
+  const closeMin = facilities.length ? Math.max(...facilities.map((f) => f.closeMin)) : DEFAULT_HOURLY_CONFIG.closeMin;
+  const holdMinutes = DEFAULT_HOURLY_CONFIG.holdMinutes;
+  const bookingWindowDays = facilities.length
+    ? Math.max(...facilities.map((f) => f.bookingWindowDays))
+    : DEFAULT_HOURLY_CONFIG.bookingWindowDays;
+
+  // Distinct facility names across every ground: "Box Cricket · Nets · Bowling
+  // Machine · Pickleball" rather than a number nobody can picture.
+  const facilityNames = [...new Set(facilities.map((f) => f.name))];
 
   const stats = [
     { value: String(locations.length), label: locations.length === 1 ? "Ground" : "Grounds" },
     { value: `${formatMinutes(openMin).replace(":00", "")}–${formatMinutes(closeMin).replace(":00", "")}`, label: "Open daily" },
-    { value: `From ${formatCurrency(minPrice)}`, label: "Per hour" },
+    { value: `From ${formatCurrency(minPrice)}`, label: "Starting price" },
     { value: `${holdMinutes} min`, label: "Slot held while you pay" },
   ];
 
@@ -92,7 +86,10 @@ export default async function HomePage() {
           <div className="container relative py-20 sm:py-28 lg:py-36">
             <p className="eyebrow animate-fade-up">
               <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              {locations.length} ground{locations.length === 1 ? "" : "s"} · open daily
+              {/* Read from the catalogue rather than written into the copy: adding
+                  a facility in the admin panel should change what the front page
+                  advertises, without a deploy. */}
+              {facilityNames.length > 0 ? facilityNames.join(" · ") : `${locations.length} grounds`}
             </p>
 
             <h1 className="mt-5 max-w-3xl text-4xl font-extrabold uppercase leading-[0.95] tracking-tight text-white animate-fade-up sm:text-6xl lg:text-7xl">
@@ -102,15 +99,15 @@ export default async function HomePage() {
             </h1>
 
             <p className="mt-6 max-w-xl text-base leading-relaxed text-ink-300 animate-fade-up sm:text-lg">
-              Floodlit cricket turfs booked by the hour. Live availability, UPI payment and a WhatsApp confirmation — no
-              account, no app, no phone tag.
+              Box cricket, nets, bowling machines and pickleball courts — booked online in a minute. Live availability,
+              UPI payment and a WhatsApp confirmation, with no account, no app and no phone tag.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 animate-fade-up sm:flex-row">
               <Link href="/book">
                 <Button size="lg" className="w-full sm:w-auto">
                   <CalendarDays className="h-5 w-5" aria-hidden="true" />
-                  Check availability
+                 Book Now
                 </Button>
               </Link>
               {settings.whatsappNumber ? (
@@ -158,7 +155,7 @@ export default async function HomePage() {
             <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {locations.map((location, index) => (
                 <li
-                  key={location._id.toHexString()}
+                  key={location.id}
                   className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] transition-colors hover:border-lime-400/40"
                 >
                   <div className="relative h-48 w-full overflow-hidden bg-ink-900">
@@ -181,6 +178,24 @@ export default async function HomePage() {
                     {location.description ? (
                       <p className="mt-3 break-words text-sm text-ink-400">{location.description}</p>
                     ) : null}
+                    {/* What this particular ground has. They differ — one sells
+                        pickleball and no cricket at all — so listing them per
+                        card is the only way a customer knows where to go. */}
+                    <ul className="mt-3 flex flex-wrap gap-1.5">
+                      {location.facilities.map((f) => (
+                        <li
+                          key={f.id}
+                          className="rounded-full border border-lime-400/25 bg-lime-400/10 px-2.5 py-1 text-xs font-medium text-lime-300"
+                        >
+                          {f.name}
+                          {f.kind === "OVERS" && f.fromPricePerBlock !== null
+                            ? ` · from ${formatCurrency(f.fromPricePerBlock)} / ${f.oversPerSlot} overs`
+                            : f.fromPrice !== null
+                              ? ` · from ${formatCurrency(f.fromPrice)}`
+                              : ""}
+                        </li>
+                      ))}
+                    </ul>
                     <Link href={`/book?location=${location.slug}`} className="mt-5 block">
                       <Button className="w-full">Book this ground</Button>
                     </Link>
@@ -222,20 +237,11 @@ export default async function HomePage() {
           <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
             See it before you play
           </h2>
+          <p className="mt-3 max-w-xl text-ink-400">
+            Tap a ground to see its photos, what it charges and when it is open.
+          </p>
 
-          <div className="mt-10 grid auto-rows-[160px] grid-cols-2 gap-3 sm:auto-rows-[190px] sm:grid-cols-4">
-            {GALLERY.map((img) => (
-              <div key={img.src} className={`relative overflow-hidden rounded-xl bg-ink-900 ${img.span}`}>
-                <Image
-                  src={img.src}
-                  alt={img.alt}
-                  fill
-                  sizes="(max-width: 640px) 50vw, 25vw"
-                  className="object-cover transition-transform duration-500 hover:scale-105"
-                />
-              </div>
-            ))}
-          </div>
+          <GroundsShowcase locations={locations} />
         </section>
 
         {/* ── How booking works ────────────────────────────────────────── */}
@@ -280,7 +286,7 @@ export default async function HomePage() {
 
               <ul className="mt-8 space-y-4">
                 {locations.map((l) => (
-                  <li key={l._id.toHexString()} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                  <li key={l.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                     <p className="break-words font-semibold text-white">{l.name}</p>
                     <p className="mt-1 flex items-start gap-1.5 break-words text-sm text-ink-400">
                       <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />
@@ -288,7 +294,9 @@ export default async function HomePage() {
                     </p>
                     <a
                       className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-medium text-lime-400 hover:underline"
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${l.name} ${l.address}`)}`}
+                      // The owner's own Maps pin when they have given one — a
+                      // search on name and address can land on the wrong place.
+                      href={l.mapsUrl || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${l.name} ${l.address}`)}`}
                       target="_blank"
                       rel="noopener noreferrer"
                     >

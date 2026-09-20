@@ -51,6 +51,16 @@ export async function GET(request: Request) {
         reference: b.reference,
         locationId: b.locationId.toHexString(),
         locationName: b.locationName,
+        // Snapshots taken at booking time, so a later rename does not rewrite
+        // what the customer actually booked.
+        facilityName: b.facilityName ?? "",
+        resourceName: b.resourceName ?? "",
+        overs: b.overs ?? null,
+        ballTypeName: b.ballTypeName ?? null,
+        phoneVerified: Boolean(b.phoneVerified),
+        // A short bowling session is confirmed without paying, so "nothing
+        // received" on it is expected rather than a problem to chase.
+        payAtVenue: Boolean(b.payAtVenue),
         date: b.date,
         startMin: b.startMin,
         endMin: b.endMin,
