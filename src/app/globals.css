@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /*
+   * The customer-facing site is dark, so that is the default and the overscroll
+   * area matches it. The admin shell paints itself light on top — it is a work
+   * tool used in daylight, and a payment screenshot is easier to judge against a
+   * light surround.
+   */
+  body {
+    @apply bg-ink-950 text-ink-100 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* Native form controls (date pickers, selects) should follow the surface. */
+  .theme-dark {
+    color-scheme: dark;
+  }
+
+  .theme-light {
+    color-scheme: light;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-lime-400 ring-offset-2 ring-offset-ink-950;
+  }
+
+  .theme-light :focus-visible {
+    @apply ring-pitch-600 ring-offset-white;
+  }
+
+  button,
+  [role="button"],
+  a {
+    touch-action: manipulation;
+  }
+
+  ::selection {
+    @apply bg-lime-400/30;
+  }
+}
+
+@layer components {
+  /* ── Dark surfaces (customer site) ─────────────────────────────────── */
+  .field-label {
+    @apply mb-1.5 block text-sm font-medium text-ink-300;
+  }
+
+  .field-input {
+    @apply w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-base text-white
+      placeholder:text-ink-500 focus:border-lime-400/60 focus:outline-none focus:ring-2 focus:ring-lime-400/25
+      disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .card {
+    /* 20px of padding either side costs an eighth of a 320px screen, so phones
+       get a tighter box and the roomier one starts at the small breakpoint. */
+    @apply rounded-xl border border-white/10 bg-white/[0.04] p-4 sm:p-5;
+  }
+
+  /* ── Light surfaces (admin) ────────────────────────────────────────── */
+  .theme-light .field-label {
+    @apply text-ink-700;
+  }
+
+  .theme-light .field-input {
+    @apply border-ink-200 bg-white text-ink-900 placeholder:text-ink-400
+      focus:border-pitch-500 focus:ring-pitch-500/30 disabled:bg-ink-50;
+  }
+
+  .theme-light .card {
+    @apply border-ink-200 bg-white shadow-sm;
+  }
+
+  /* Section eyebrow used across the public site. */
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-lime-400/30 bg-lime-400/10 px-3 py-1
+      text-xs font-semibold uppercase tracking-wider text-lime-300;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Printed booking receipt ──────────────────────────────────────────────
+   The success page doubles as the receipt. Print (or "Save as PDF" on a
+   phone) drops the navigation and buttons and keeps the booking details.
+   No PDF library: the browser already does this, and it renders ₹ correctly. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  /* Force the receipt onto white paper whatever the screen theme is. */
+  body,
+  .receipt {
+    background: #fff !important;
+  }
+
+  .receipt {
+    border: 1px solid #333;
+    border-radius: 0;
+    box-shadow: none;
+    margin: 0;
+    padding: 16pt;
+  }
+
+  .receipt,
+  .receipt * {
+    color: #000 !important;
+    border-color: #999 !important;
+  }
+
+  @page {
+    margin: 14mm;
+  }
+}
+
+.print-only {
+  display: none;
+}

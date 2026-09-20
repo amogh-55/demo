@@ -1,0 +1,406 @@
+import Image from "next/image";
+import Link from "next/link";
+import {
+  CalendarDays,
+  Car,
+  Clock,
+  Droplets,
+  Dumbbell,
+  Lightbulb,
+  MapPin,
+  Phone,
+  QrCode,
+  ShieldCheck,
+  ShowerHead,
+  Sparkles,
+  Trophy,
+} from "lucide-react";
+import { DEFAULT_SLOT_CONFIG } from "@/lib/booking/service";
+import { collections, getDb } from "@/lib/db";
+import { getSettings } from "@/lib/settings";
+import { formatMinutes } from "@/lib/time";
+import { Button, formatCurrency } from "@/components/ui/primitives";
+import { SiteHeader, StickyBookBar } from "@/components/customer/site-chrome";
+import { TurfAssistant } from "@/components/customer/turf-assistant";
+import { whatsappUrl } from "@/lib/whatsapp";
+
+export const dynamic = "force-dynamic";
+
+const FACILITIES = [
+  { icon: Lightbulb, title: "Floodlights", body: "LED masts with no shadows on the crease. Play as late as you like." },
+  { icon: Trophy, title: "Match-grade turf", body: "Artificial grass on a shock-pad base, swept and checked daily." },
+  { icon: Car, title: "Free parking", body: "Covered slots for cars and bikes right beside the gate." },
+  { icon: ShowerHead, title: "Changing rooms", body: "Lockers, benches and clean washrooms on site." },
+  { icon: Droplets, title: "Drinking water", body: "Filtered coolers beside every dugout, refilled through the day." },
+  { icon: Dumbbell, title: "Gear on request", body: "Bats, balls, pads and gloves if you turn up empty-handed." },
+];
+
+const GALLERY = [
+  { src: "/images/floodlight-turf.jpg", alt: "Floodlit turf at night", span: "sm:col-span-2 sm:row-span-2" },
+  { src: "/images/batsman-action.jpg", alt: "Batsman playing a shot", span: "" },
+  { src: "/images/ball-closeup.jpg", alt: "Cricket ball on the turf", span: "" },
+  { src: "/images/bowler-action.jpg", alt: "Bowler in delivery stride", span: "" },
+  { src: "/images/cricket-action-3.jpg", alt: "Players mid-match", span: "" },
+  { src: "/images/box-cricket-turf.jpg", alt: "Box cricket nets", span: "sm:col-span-2" },
+];
+
+const STEPS = [
+  { icon: MapPin, title: "Pick your ground", body: "Choose the turf nearest you." },
+  { icon: CalendarDays, title: "Choose date & time", body: "Live availability, by the hour." },
+  { icon: QrCode, title: "Pay by UPI", body: "Scan, pay, upload the screenshot." },
+  { icon: ShieldCheck, title: "Get confirmed", body: "We verify and confirm on WhatsApp." },
+];
+
+export default async function HomePage() {
+  const db = await getDb();
+  const [locations, settings, configs] = await Promise.all([
+    collections.locations(db).find({ active: true }).sort({ name: 1 }).toArray(),
+    getSettings(),
+    collections.slotConfigs(db).find({}).toArray(),
+  ]);
+
+  // Every headline number comes from the same configuration the booking engine
+  // uses, so the marketing copy can never drift from what customers are charged.
+  const prices = configs.flatMap((c) => c.priceRules.map((r) => r.price));
+  const minPrice = prices.length ? Math.min(...prices) : DEFAULT_SLOT_CONFIG.priceRules[0]!.price;
+  const maxPrice = prices.length ? Math.max(...prices) : DEFAULT_SLOT_CONFIG.priceRules.at(-1)!.price;
+  const openMin = configs.length ? Math.min(...configs.map((c) => c.openMin)) : DEFAULT_SLOT_CONFIG.openMin;
+  const closeMin = configs.length ? Math.max(...configs.map((c) => c.closeMin)) : DEFAULT_SLOT_CONFIG.closeMin;
+  const holdMinutes = configs.length ? Math.min(...configs.map((c) => c.holdMinutes)) : DEFAULT_SLOT_CONFIG.holdMinutes;
+  const bookingWindowDays = configs.length
+    ? Math.max(...configs.map((c) => c.bookingWindowDays))
+    : DEFAULT_SLOT_CONFIG.bookingWindowDays;
+
+  const stats = [
+    { value: String(locations.length), label: locations.length === 1 ? "Ground" : "Grounds" },
+    { value: `${formatMinutes(openMin).replace(":00", "")}–${formatMinutes(closeMin).replace(":00", "")}`, label: "Open daily" },
+    { value: `From ${formatCurrency(minPrice)}`, label: "Per hour" },
+    { value: `${holdMinutes} min`, label: "Slot held while you pay" },
+  ];
+
+  return (
+    <div className="min-h-dvh bg-ink-950">
+      <SiteHeader businessName={settings.businessName} supportPhone={settings.supportPhone} />
+
+      <main id="main">
+        {/* ── Hero ─────────────────────────────────────────────────────── */}
+        <section className="relative isolate overflow-hidden">
+          <Image src="/images/hero-turf-action.jpg" alt="" fill priority sizes="100vw" className="object-cover opacity-40" />
+          <div className="absolute inset-0 bg-gradient-to-b from-ink-950/70 via-ink-950/85 to-ink-950" />
+          <div className="absolute inset-0 bg-pitch-glow" />
+
+          <div className="container relative py-20 sm:py-28 lg:py-36">
+            <p className="eyebrow animate-fade-up">
+              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+              {locations.length} ground{locations.length === 1 ? "" : "s"} · open daily
+            </p>
+
+            <h1 className="mt-5 max-w-3xl text-4xl font-extrabold uppercase leading-[0.95] tracking-tight text-white animate-fade-up sm:text-6xl lg:text-7xl">
+              Everything a match
+              <br />
+              <span className="text-lime-400">deserves.</span>
+            </h1>
+
+            <p className="mt-6 max-w-xl text-base leading-relaxed text-ink-300 animate-fade-up sm:text-lg">
+              Floodlit cricket turfs booked by the hour. Live availability, UPI payment and a WhatsApp confirmation — no
+              account, no app, no phone tag.
+            </p>
+
+            <div className="mt-8 flex flex-col gap-3 animate-fade-up sm:flex-row">
+              <Link href="/book">
+                <Button size="lg" className="w-full sm:w-auto">
+                  <CalendarDays className="h-5 w-5" aria-hidden="true" />
+                  Check availability
+                </Button>
+              </Link>
+              {settings.whatsappNumber ? (
+                <a
+                  href={whatsappUrl(settings.whatsappNumber, `Hi ${settings.businessName}, I'd like to know about turf bookings.`)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Button size="lg" variant="secondary" className="w-full sm:w-auto">
+                    Chat on WhatsApp
+                  </Button>
+                </a>
+              ) : null}
+            </div>
+
+            {/* Two columns on a phone leaves ~110px per cell, so the padding and the
+                figure both step down rather than letting "From ₹1,200" wrap mid-price. */}
+            <dl className="mt-14 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/10 bg-white/10 lg:grid-cols-4">
+              {stats.map((s) => (
+                <div key={s.label} className="bg-ink-950/80 px-3 py-4 text-center sm:px-4 sm:py-5">
+                  <dt className="sr-only">{s.label}</dt>
+                  <dd>
+                    <span className="block break-words text-lg font-bold text-lime-400 sm:text-2xl">{s.value}</span>
+                    <span className="mt-1 block text-xs text-ink-400">{s.label}</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+
+        {/* ── Grounds ──────────────────────────────────────────────────── */}
+        <section id="grounds" className="container scroll-mt-20 py-16 sm:py-24">
+          <p className="eyebrow">Our grounds</p>
+          <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
+            Pick the turf nearest you
+          </h2>
+          <p className="mt-3 max-w-xl text-ink-400">Every ground is floodlit, match-ready and open late.</p>
+
+          {locations.length === 0 ? (
+            <p className="mt-10 rounded-xl border border-dashed border-white/15 px-6 py-12 text-center text-ink-400">
+              No grounds are open for booking right now. Please check back shortly.
+            </p>
+          ) : (
+            <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {locations.map((location, index) => (
+                <li
+                  key={location._id.toHexString()}
+                  className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] transition-colors hover:border-lime-400/40"
+                >
+                  <div className="relative h-48 w-full overflow-hidden bg-ink-900">
+                    <Image
+                      src={location.image || ["/images/floodlight-turf.jpg", "/images/box-cricket-turf.jpg", "/images/cricket-sunset.jpg"][index % 3]!}
+                      alt={location.name}
+                      fill
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                      className="object-cover transition-transform duration-500 group-hover:scale-105"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-transparent to-transparent" />
+                  </div>
+                  <div className="p-5">
+                    {/* Ground names and addresses are customer data — assume the longest. */}
+                    <h3 className="break-words text-lg font-bold text-white">{location.name}</h3>
+                    <p className="mt-2 flex items-start gap-1.5 break-words text-sm text-ink-400">
+                      <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />
+                      {location.address}
+                    </p>
+                    {location.description ? (
+                      <p className="mt-3 break-words text-sm text-ink-400">{location.description}</p>
+                    ) : null}
+                    <Link href={`/book?location=${location.slug}`} className="mt-5 block">
+                      <Button className="w-full">Book this ground</Button>
+                    </Link>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* ── Facilities ───────────────────────────────────────────────── */}
+        <section id="facilities" className="scroll-mt-20 border-y border-white/10 bg-white/[0.02] py-16 sm:py-24">
+          <div className="container">
+            <p className="eyebrow">Facilities</p>
+            <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
+              Built like a pro venue
+            </h2>
+            <p className="mt-3 max-w-xl text-ink-400">
+              Maintained daily so your game never has an excuse.
+            </p>
+
+            <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {FACILITIES.map((f) => (
+                <li key={f.title} className="rounded-2xl border border-white/10 bg-ink-950 p-5">
+                  <span className="mb-4 grid h-11 w-11 place-items-center rounded-xl bg-lime-400/10 text-lime-400">
+                    <f.icon className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <h3 className="font-bold text-white">{f.title}</h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-ink-400">{f.body}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* ── Gallery ──────────────────────────────────────────────────── */}
+        <section id="gallery" className="container scroll-mt-20 py-16 sm:py-24">
+          <p className="eyebrow">Gallery</p>
+          <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
+            See it before you play
+          </h2>
+
+          <div className="mt-10 grid auto-rows-[160px] grid-cols-2 gap-3 sm:auto-rows-[190px] sm:grid-cols-4">
+            {GALLERY.map((img) => (
+              <div key={img.src} className={`relative overflow-hidden rounded-xl bg-ink-900 ${img.span}`}>
+                <Image
+                  src={img.src}
+                  alt={img.alt}
+                  fill
+                  sizes="(max-width: 640px) 50vw, 25vw"
+                  className="object-cover transition-transform duration-500 hover:scale-105"
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ── How booking works ────────────────────────────────────────── */}
+        <section className="border-y border-white/10 bg-white/[0.02] py-16 sm:py-24">
+          <div className="container">
+            <p className="eyebrow">How it works</p>
+            <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
+              Booked in two minutes
+            </h2>
+
+            <ol className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {STEPS.map((step, i) => (
+                <li key={step.title} className="relative rounded-2xl border border-white/10 bg-ink-950 p-5">
+                  <span className="absolute right-4 top-4 text-3xl font-black text-white/5">{i + 1}</span>
+                  <span className="mb-4 grid h-11 w-11 place-items-center rounded-xl bg-lime-400/10 text-lime-400">
+                    <step.icon className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <h3 className="font-bold text-white">{step.title}</h3>
+                  <p className="mt-1.5 text-sm text-ink-400">{step.body}</p>
+                </li>
+              ))}
+            </ol>
+
+            <p className="mt-8 flex items-center gap-2 text-sm text-ink-400">
+              <Clock className="h-4 w-4 text-lime-400" aria-hidden="true" />
+              Your slot is held for {holdMinutes} minutes while you pay, so nobody can take it mid-payment.
+            </p>
+          </div>
+        </section>
+
+        {/* ── Location & contact ───────────────────────────────────────── */}
+        <section id="location" className="container scroll-mt-20 py-16 sm:py-24">
+          <div className="grid gap-10 lg:grid-cols-2">
+            <div>
+              <p className="eyebrow">Find us</p>
+              <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
+                Come and play
+              </h2>
+              <p className="mt-3 text-ink-400">
+                Planning a tournament, a corporate match or a regular weekly slot? Call us and we will sort it out.
+              </p>
+
+              <ul className="mt-8 space-y-4">
+                {locations.map((l) => (
+                  <li key={l._id.toHexString()} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                    <p className="break-words font-semibold text-white">{l.name}</p>
+                    <p className="mt-1 flex items-start gap-1.5 break-words text-sm text-ink-400">
+                      <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />
+                      {l.address}
+                    </p>
+                    <a
+                      className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-medium text-lime-400 hover:underline"
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${l.name} ${l.address}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Get directions →
+                    </a>
+                  </li>
+                ))}
+              </ul>
+
+              {settings.supportPhone ? (
+                <a
+                  href={`tel:+91${settings.supportPhone}`}
+                  className="mt-6 inline-flex min-h-[44px] items-center gap-2 text-lg font-bold text-white hover:text-lime-400"
+                >
+                  <Phone className="h-5 w-5 text-lime-400" aria-hidden="true" />
+                  +91 {settings.supportPhone}
+                </a>
+              ) : null}
+            </div>
+
+            <div className="relative min-h-[320px] overflow-hidden rounded-2xl border border-white/10">
+              <Image
+                src="/images/cricket-stadium.jpg"
+                alt="Floodlit cricket ground at dusk"
+                fill
+                sizes="(max-width: 1024px) 100vw, 50vw"
+                className="object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/20 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-6">
+                <p className="text-sm text-ink-300">Open daily</p>
+                <p className="text-2xl font-bold text-white">
+                  {formatMinutes(openMin)} – {formatMinutes(closeMin)}
+                </p>
+                <p className="mt-1 text-sm text-ink-400">
+                  {formatCurrency(minPrice)}–{formatCurrency(maxPrice)} per hour · book up to {bookingWindowDays} days ahead
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── FAQ / assistant prompt ───────────────────────────────────── */}
+        <section id="faq" className="scroll-mt-20 border-t border-white/10 bg-white/[0.02] py-16 sm:py-24">
+          <div className="container text-center">
+            <p className="eyebrow mx-auto">Questions</p>
+            <h2 className="mt-4 text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">
+              Anything you want to know
+            </h2>
+            <p className="mx-auto mt-3 max-w-lg text-ink-400">
+              Tap the chat button for instant answers on prices, timings and how booking works — or message the team
+              directly.
+            </p>
+            <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+              <Link href="/book">
+                <Button size="lg" className="w-full sm:w-auto">
+                  Book a slot
+                </Button>
+              </Link>
+              {settings.whatsappNumber ? (
+                <a
+                  href={whatsappUrl(settings.whatsappNumber, `Hi ${settings.businessName}, I have a question.`)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Button size="lg" variant="whatsapp" className="w-full sm:w-auto">
+                    Message us
+                  </Button>
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      </main>
+
+      {/* The sticky book bar is fixed over the last ~72px of the page, so the footer
+          buys itself room to sit clear of it on phones. */}
+      <footer className="border-t border-white/10 pb-[calc(6rem_+_env(safe-area-inset-bottom))] pt-10 lg:pb-10">
+        <div className="container flex flex-col gap-4 text-sm text-ink-500 sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            © {new Date().getFullYear()} {settings.businessName}
+          </p>
+          <div className="-my-2 flex flex-wrap items-center gap-x-5">
+            <a href="#grounds" className="py-2 hover:text-ink-300">
+              Grounds
+            </a>
+            <a href="#facilities" className="py-2 hover:text-ink-300">
+              Facilities
+            </a>
+            <Link href="/admin" className="py-2 hover:text-ink-300">
+              Staff login
+            </Link>
+          </div>
+        </div>
+      </footer>
+
+      <StickyBookBar />
+      <TurfAssistant
+        facts={{
+          businessName: settings.businessName,
+          supportPhone: settings.supportPhone,
+          whatsappNumber: settings.whatsappNumber,
+          grounds: locations.map((l) => ({ name: l.name, address: l.address })),
+          openMin,
+          closeMin,
+          minPrice,
+          maxPrice,
+          holdMinutes,
+          bookingWindowDays,
+          upiId: settings.upiId,
+        }}
+      />
+    </div>
+  );
+}
