@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ObjectId } from "mongodb";
 import { isValidBusinessDate, MINUTES_IN_DAY } from "./time";
+import type { PriceRule } from "./types";
 
 export const objectIdSchema = z
   .string()
@@ -310,6 +311,15 @@ const ballTypeSchema = z.object({
  * unsellable stub at the end of the day, and an overs option that is not a whole
  * number of slots could never be reserved atomically.
  */
+/** Whether every slot the operating window produces falls inside some price band. */
+function coversEveryStart(rules: PriceRule[], openMin: number, closeMin: number, slotMinutes: number): boolean {
+  if (!(slotMinutes > 0) || !(closeMin > openMin)) return true; // Other refinements report these.
+  for (let start = openMin; start + slotMinutes <= closeMin; start += slotMinutes) {
+    if (!rules.some((r) => start >= r.fromMin && start < r.toMin)) return false;
+  }
+  return true;
+}
+
 export const facilityConfigSchema = z
   .object({
     slotMinutes: z.number().int().min(15).max(240),
@@ -367,7 +377,28 @@ export const facilityConfigSchema = z
   .refine((c) => c.weekendPriceRules.length === 0 || c.weekendDays.length > 0, {
     message: "Choose which days the weekend prices apply to",
     path: ["weekendDays"],
-  });
+  })
+  /**
+   * Every sellable slot must carry a price.
+   *
+   * Unpriced time does not fail anywhere downstream — `buildDayTemplate` simply
+   * skips it — so a ground that opens at midnight with bands starting at 6 AM
+   * shows customers nothing before 6 and reports no error at all. The owner reads
+   * that as the site being broken, which is fair, so it is refused at the door.
+   */
+  .refine((c) => coversEveryStart(c.priceRules, c.openMin, c.closeMin, c.slotMinutes), {
+    message: "Some opening hours have no price band, so customers could not book them",
+    path: ["priceRules"],
+  })
+  .refine(
+    (c) =>
+      c.weekendPriceRules.length === 0 ||
+      coversEveryStart(c.weekendPriceRules, c.openMin, c.closeMin, c.slotMinutes),
+    {
+      message: "Some opening hours have no weekend price band, so customers could not book them",
+      path: ["weekendPriceRules"],
+    },
+  );
 
 export const settingsSchema = z.object({
   businessName: z.string().trim().min(2).max(80),

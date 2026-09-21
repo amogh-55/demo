@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
-import { fail, HOLD_COOKIE, LAST_BOOKING_COOKIE, ok, readJson } from "@/lib/api";
+import { fail, HOLD_COOKIE, LAST_BOOKING_COOKIE, ok, readJson, UPLOAD_FAILED_COOKIE } from "@/lib/api";
 import { signCookieValue } from "@/lib/auth";
 import { submitBooking } from "@/lib/booking/service";
+import { uploadFailureProven } from "@/lib/booking/upload-failure";
 import { appError } from "@/lib/errors";
 import { OTP_COOKIE, readVerifiedPhone } from "@/lib/otp";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -49,6 +50,12 @@ export async function POST(request: Request) {
       utr: input.utr,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,
+      /*
+       * Read from a cookie this server signed, never from the request body. It
+       * is the only thing that lets a booking through without a screenshot, so
+       * a client asserting it would be a client waiving the requirement.
+       */
+      storageFailed: uploadFailureProven(jar.get(UPLOAD_FAILED_COOKIE)?.value, input.holdToken),
     });
 
     if (settings.notifyOnNewBooking) {
@@ -72,6 +79,9 @@ export async function POST(request: Request) {
     });
     // ...and drop the hold cookie, so the customer can immediately book again.
     jar.set(HOLD_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
+    // The exemption belonged to this hold and is spent. Leaving it would let the
+    // next booking from this browser skip its screenshot too.
+    jar.set(UPLOAD_FAILED_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
 
     return ok({
       reference: booking.reference,

@@ -14,6 +14,18 @@ export const HOLD_COOKIE = "turf_hold";
  */
 export const LAST_BOOKING_COOKIE = "turf_booking";
 
+/**
+ * Proof that a screenshot upload failed for infrastructure reasons.
+ *
+ * The fallback — book on the UTR with no image — must be reachable only when the
+ * storage provider genuinely refused a valid file. A client simply sending no key
+ * is indistinguishable from one whose upload failed, so the claim cannot come
+ * from the client at all: this cookie is signed by the server and issued only by
+ * the upload route, only after a real store failure, and it names the hold it
+ * happened on so it cannot be replayed against a later booking.
+ */
+export const UPLOAD_FAILED_COOKIE = "turf_upload_failed";
+
 export function ok<T>(data: T, init?: ResponseInit) {
   return NextResponse.json(data, { status: 200, ...init });
 }

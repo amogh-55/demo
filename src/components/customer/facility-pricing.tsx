@@ -89,10 +89,13 @@ export function FacilityPricing({ facility }: { facility: Facility }) {
             </p>
             <BandList bands={facility.priceBands} />
           </div>
-          <div className="rounded-lg border border-lime-400/30 bg-lime-400/[0.04] p-3">
+          {/* Styled exactly like the weekday box. A green outline here read as a
+              selected option — customers asked why the weekend was "chosen" for
+              them. It is a price list, not a choice. */}
+          <div className="rounded-lg border border-white/10 p-3">
             <p className="mb-2 flex items-baseline justify-between gap-2">
               <span className="text-sm font-semibold text-white">Weekends</span>
-              <span className="text-xs text-lime-400/80">{describeDays(weekendDays)}</span>
+              <span className="text-xs text-ink-400">{describeDays(weekendDays)}</span>
             </p>
             <BandList bands={weekendBands} />
           </div>

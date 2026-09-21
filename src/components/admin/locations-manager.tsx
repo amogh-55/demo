@@ -4,7 +4,7 @@ import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
 import { formatMinutes, minutesToDuration } from "@/lib/time";
-import { Alert, Button, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
+import { Alert, Button, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
 interface AdminLocation {
   id: string;
@@ -76,6 +76,170 @@ interface Tree {
 
 const HOURS = Array.from({ length: 25 }, (_, i) => i * 60);
 
+/**
+ * A price the owner has not typed yet.
+ *
+ * `NaN` rather than a separate draft type: it lives in the same `number` field
+ * every price already uses, renders as an empty box, and `Number.isFinite` is
+ * the one check for "is this set". A blank field used to snap straight back to
+ * 0 — `Number("")` is 0 — so deleting "700" left a stubborn zero that the next
+ * keystroke turned into "0900".
+ */
+const UNSET = Number.NaN;
+const isSet = (price: number) => Number.isFinite(price);
+
+/**
+ * A price box that can be emptied.
+ *
+ * It keeps the text the owner typed, not a number round-tripped through the
+ * state: the round trip is what made the zero impossible to delete, and what
+ * turned a half-typed "0.5" into "0". Only a value that parses is pushed up.
+ */
+function PriceInput({
+  id,
+  value,
+  onChange,
+  invalid,
+  describedBy,
+  min = 0,
+  max,
+}: {
+  id: string;
+  value: number;
+  onChange: (next: number) => void;
+  invalid?: boolean;
+  describedBy?: string;
+  min?: number;
+  max?: number;
+}) {
+  const [raw, setRaw] = React.useState(() => (isSet(value) ? String(value) : ""));
+
+  // Follows the value when something other than typing changes it — switching
+  // facility, or a band the editor added — without fighting the box mid-keystroke.
+  React.useEffect(() => {
+    setRaw((current) => (Number(current) === value && current !== "" ? current : isSet(value) ? String(value) : ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return (
+    <input
+      id={id}
+      type="number"
+      inputMode="numeric"
+      min={min}
+      max={max}
+      className="field-input"
+      aria-invalid={invalid ? true : undefined}
+      aria-describedby={describedBy}
+      value={raw}
+      onChange={(e) => {
+        const next = e.target.value;
+        setRaw(next);
+        onChange(next.trim() === "" ? UNSET : Number(next));
+      }}
+    />
+  );
+}
+
+type Problems = Record<string, string>;
+
+/** Every slot start the operating window produces. */
+function slotStarts(openMin: number, closeMin: number, slotMinutes: number): number[] {
+  const starts: number[] = [];
+  if (!(slotMinutes > 0) || !(closeMin > openMin)) return starts;
+  for (let m = openMin; m + slotMinutes <= closeMin; m += slotMinutes) starts.push(m);
+  return starts;
+}
+
+/**
+ * The runs of time inside the operating window that no band prices.
+ *
+ * Unpriced time does not error anywhere — it simply vanishes from the customer's
+ * grid, which is how a ground can be "open from midnight" and still show nothing
+ * before 6 AM. Returned as bands so the editor can offer to add them.
+ */
+function gapBands(rules: PriceRule[], openMin: number, closeMin: number, slotMinutes: number): PriceRule[] {
+  const gaps: PriceRule[] = [];
+  let run: { from: number; to: number } | null = null;
+
+  for (const start of slotStarts(openMin, closeMin, slotMinutes)) {
+    const priced = rules.some((r) => start >= r.fromMin && start < r.toMin);
+    if (priced) {
+      if (run) gaps.push({ fromMin: run.from, toMin: run.to, price: UNSET });
+      run = null;
+      continue;
+    }
+    run = run ? { from: run.from, to: start + slotMinutes } : { from: start, to: start + slotMinutes };
+  }
+  if (run) gaps.push({ fromMin: run.from, toMin: run.to, price: UNSET });
+  return gaps;
+}
+
+/**
+ * Everything wrong with a schedule, keyed by the field it belongs to.
+ *
+ * Run on every keystroke rather than on save. The complaint the owner used to
+ * get — "closing time cannot be before opening time" — arrived after they had
+ * scrolled to the bottom and pressed Save, by which point it was no longer
+ * obvious which of the boxes above it was about.
+ */
+function scheduleProblems(config: FacilityConfig, kind: "HOURLY" | "OVERS"): Problems {
+  const p: Problems = {};
+
+  if (!(config.closeMin > config.openMin)) {
+    p.closeMin = "Closing time must be after opening time.";
+  } else if ((config.closeMin - config.openMin) % config.slotMinutes !== 0) {
+    p.closeMin = `Opening hours must divide into whole ${config.slotMinutes}-minute slots.`;
+  }
+
+  if (!Number.isInteger(config.bookingWindowDays) || config.bookingWindowDays < 0 || config.bookingWindowDays > 365) {
+    p.bookingWindowDays = "Enter a number of days between 0 and 365.";
+  }
+
+  const checkBands = (rules: PriceRule[], prefix: string, label: string) => {
+    rules.forEach((rule, i) => {
+      if (rule.toMin <= rule.fromMin) p[`${prefix}-range-${i}`] = "The end of a band must be after its start.";
+      if (!isSet(rule.price)) p[`${prefix}-price-${i}`] = "Set a price for these hours.";
+      else if (rule.price < 0) p[`${prefix}-price-${i}`] = "A price cannot be negative.";
+    });
+
+    const gaps = gapBands(rules, config.openMin, config.closeMin, config.slotMinutes);
+    if (gaps.length > 0) {
+      p[`${prefix}-coverage`] =
+        `${label} ${gaps.map((g) => `${formatMinutes(g.fromMin)}–${formatMinutes(g.toMin)}`).join(", ")} ` +
+        "has no price, so customers cannot book it. Add a band covering it.";
+    }
+  };
+
+  if (kind === "HOURLY") {
+    if (config.priceRules.length === 0) p["weekday-coverage"] = "Add at least one price band.";
+    else checkBands(config.priceRules, "weekday", "");
+
+    const weekend = config.weekendPriceRules ?? [];
+    if (weekend.length > 0) {
+      checkBands(weekend, "weekend", "");
+      if ((config.weekendDays ?? []).length === 0) {
+        p.weekendDays = "Pick at least one day, or turn weekend pricing off.";
+      }
+    }
+  } else {
+    if (!Number.isInteger(config.oversPerSlot) || config.oversPerSlot < 1) {
+      p.oversPerSlot = "Enter how many overs one block buys.";
+    } else if (config.payAtVenueMaxOvers > 0 && config.payAtVenueMaxOvers % config.oversPerSlot !== 0) {
+      p.payAtVenueMaxOvers = `Must be a whole number of ${config.oversPerSlot}-over blocks.`;
+    }
+    if (config.ballTypes.length === 0) p.ballTypes = "Add at least one ball type.";
+    config.ballTypes.forEach((ball, i) => {
+      if (!ball.name.trim()) p[`ball-name-${i}`] = "Give this ball a name.";
+      if (!isSet(ball.pricePerSlot)) p[`ball-price-${i}`] = "Set a price for this ball.";
+      else if (ball.pricePerSlot < 0) p[`ball-price-${i}`] = "A price cannot be negative.";
+    });
+  }
+
+  return p;
+}
+
+
 /** "Bowling Machine" → "bowling-machine", for the slug fields. */
 function slugify(value: string): string {
   return value
@@ -85,15 +249,24 @@ function slugify(value: string): string {
     .slice(0, 60);
 }
 
-export function LocationsManager({ initialLocations }: { initialLocations: AdminLocation[] }) {
+export function LocationsManager({
+  initialLocations,
+  initialTree,
+}: {
+  initialLocations: AdminLocation[];
+  /** Rendered on the server with the locations, so no ground ever reads "0 facilities". */
+  initialTree: Tree;
+}) {
   const [locations, setLocations] = React.useState(initialLocations);
   const [selectedId, setSelectedId] = React.useState(initialLocations[0]?.id ?? "");
-  const [tree, setTree] = React.useState<Tree>({ facilities: [], resources: [] });
+  const [tree, setTree] = React.useState<Tree>(initialTree);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   const selected = locations.find((l) => l.id === selectedId);
 
+  // Only after an edit. The first paint already has the tree the server sent, so
+  // there is no fetch on mount and nothing to be briefly wrong about.
   const refreshTree = React.useCallback(async () => {
     try {
       const data = await api<Tree>("/api/admin/facilities");
@@ -102,10 +275,6 @@ export function LocationsManager({ initialLocations }: { initialLocations: Admin
       setError(errorMessage(err));
     }
   }, []);
-
-  React.useEffect(() => {
-    void refreshTree();
-  }, [refreshTree]);
 
   async function refreshLocations() {
     const data = await api<{ locations: AdminLocation[] }>("/api/admin/locations");
@@ -560,9 +729,41 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
   const [saved, setSaved] = React.useState(false);
 
   const isOvers = facility.kind === "OVERS";
-  const update = (patch: Partial<FacilityConfig>) => setConfig({ ...config, ...patch });
+  const problems = scheduleProblems(config, facility.kind);
+  const problemCount = Object.keys(problems).length;
+
+  /**
+   * Widening the hours without widening the price bands leaves the new time
+   * unpriced, and unpriced time does not warn — it just never appears on the
+   * customer's grid. Opening at midnight and finding nothing bookable before 6
+   * looks exactly like a broken site.
+   *
+   * So the bands are stretched to follow the hours: an empty band is laid down
+   * over whatever the change exposed, and the validation below refuses to save
+   * until a price is typed into it.
+   */
+  const update = (patch: Partial<FacilityConfig>) => {
+    setConfig((current) => {
+      const next = { ...current, ...patch };
+      const hoursMoved = patch.openMin !== undefined || patch.closeMin !== undefined;
+      if (!hoursMoved || facility.kind !== "HOURLY" || !(next.closeMin > next.openMin)) return next;
+
+      const fill = (rules: PriceRule[]) =>
+        rules.length === 0 ? rules : [...rules, ...gapBands(rules, next.openMin, next.closeMin, next.slotMinutes)];
+
+      return {
+        ...next,
+        priceRules: fill(next.priceRules),
+        weekendPriceRules: fill(next.weekendPriceRules ?? []),
+      };
+    });
+  };
 
   async function save() {
+    if (problemCount > 0) {
+      setError("Fix the highlighted fields first.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -601,13 +802,21 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
           <label className="field-label" htmlFor="close-min">
             Closes at
           </label>
-          <select id="close-min" className="field-input" value={config.closeMin} onChange={(e) => update({ closeMin: Number(e.target.value) })}>
+          <select
+            id="close-min"
+            className="field-input"
+            aria-invalid={problems.closeMin ? true : undefined}
+            aria-describedby={problems.closeMin ? "close-min-error" : undefined}
+            value={config.closeMin}
+            onChange={(e) => update({ closeMin: Number(e.target.value) })}
+          >
             {HOURS.slice(1).map((m) => (
               <option key={m} value={m}>
                 {m === 1440 ? "12:00 AM (midnight)" : formatMinutes(m)}
               </option>
             ))}
           </select>
+          {problems.closeMin ? <FieldError id="close-min-error">{problems.closeMin}</FieldError> : null}
         </div>
         {/* Slot length and hold duration are deliberately not editable here. Slot
             length is the unit the double-booking index is built on — the server
@@ -617,27 +826,47 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
           <label className="field-label" htmlFor="window-days">
             Booking window (days ahead)
           </label>
-          <input
+          <PriceInput
             id="window-days"
-            type="number"
             min={0}
             max={365}
-            className="field-input"
             value={config.bookingWindowDays}
-            onChange={(e) => update({ bookingWindowDays: Number(e.target.value) })}
+            invalid={Boolean(problems.bookingWindowDays)}
+            describedBy={problems.bookingWindowDays ? "window-days-error" : undefined}
+            onChange={(bookingWindowDays) => update({ bookingWindowDays })}
           />
+          {problems.bookingWindowDays ? (
+            <FieldError id="window-days-error">{problems.bookingWindowDays}</FieldError>
+          ) : null}
         </div>
       </div>
 
       {isOvers ? (
-        <OversPricing config={config} update={update} />
+        <OversPricing config={config} update={update} problems={problems} />
       ) : (
-        <HourlyPricing config={config} update={update} />
+        <HourlyPricing config={config} update={update} problems={problems} />
       )}
+
+      {/* Listed as well as outlined: on a phone the offending field is usually
+          scrolled off screen by the time the owner reaches Save, and "fix the
+          highlighted fields" is no help when none of them are visible. */}
+      {problemCount > 0 ? (
+        <Alert tone="error" className="mt-4">
+          <p className="font-semibold">
+            {problemCount === 1 ? "One thing needs fixing" : `${problemCount} things need fixing`} before this can be
+            saved:
+          </p>
+          <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
+            {Object.entries(problems).map(([key, message]) => (
+              <li key={key}>{message}</li>
+            ))}
+          </ul>
+        </Alert>
+      ) : null}
 
       {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
 
-      <Button className="mt-4 w-full sm:w-auto" onClick={save} disabled={busy}>
+      <Button className="mt-4 w-full sm:w-auto" onClick={save} disabled={busy || problemCount > 0}>
         {busy ? <Spinner /> : null}
         {busy ? "Saving…" : saved ? "Saved" : "Save schedule"}
       </Button>
@@ -665,20 +894,27 @@ const WEEK = [
  */
 function PriceBands({
   idPrefix,
+  problemKey,
+  problems,
   title,
   description,
   rules,
   openMin,
   closeMin,
+  slotMinutes,
   onChange,
   minBands = 1,
 }: {
   idPrefix: string;
+  /** Which half of {@link scheduleProblems} this table's complaints are under. */
+  problemKey: "weekday" | "weekend";
+  problems: Problems;
   title: string;
   description: string;
   rules: PriceRule[];
   openMin: number;
   closeMin: number;
+  slotMinutes: number;
   onChange: (rules: PriceRule[]) => void;
   minBands?: number;
 }) {
@@ -742,15 +978,16 @@ function PriceBands({
               <label className="field-label text-xs" htmlFor={`${idPrefix}-price-${index}`}>
                 Price per slot
               </label>
-              <input
+              <PriceInput
                 id={`${idPrefix}-price-${index}`}
-                type="number"
-                min={0}
-                className="field-input"
                 value={rule.price}
-                onChange={(e) => {
+                invalid={Boolean(problems[`${problemKey}-price-${index}`])}
+                describedBy={
+                  problems[`${problemKey}-price-${index}`] ? `${idPrefix}-price-${index}-error` : undefined
+                }
+                onChange={(price) => {
                   const rules = [...config.priceRules];
-                  rules[index] = { ...rule, price: Number(e.target.value) };
+                  rules[index] = { ...rule, price };
                   update({ priceRules: rules });
                 }}
               />
@@ -765,9 +1002,29 @@ function PriceBands({
             >
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
+            {problems[`${problemKey}-price-${index}`] || problems[`${problemKey}-range-${index}`] ? (
+              <div className="col-span-2 sm:col-span-4">
+                {problems[`${problemKey}-range-${index}`] ? (
+                  <FieldError>{problems[`${problemKey}-range-${index}`]}</FieldError>
+                ) : null}
+                {problems[`${problemKey}-price-${index}`] ? (
+                  <FieldError id={`${idPrefix}-price-${index}-error`}>
+                    {problems[`${problemKey}-price-${index}`]}
+                  </FieldError>
+                ) : null}
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>
+
+      {/* Hours nobody priced. Said here rather than only in the summary, because
+          the fix is the "Add band" button directly underneath it. */}
+      {problems[`${problemKey}-coverage`] ? (
+        <div className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2">
+          <FieldError>{problems[`${problemKey}-coverage`]}</FieldError>
+        </div>
+      ) : null}
 
       <Button
         variant="secondary"
@@ -775,9 +1032,15 @@ function PriceBands({
         className="mt-3 h-11 w-full sm:h-9 sm:w-auto"
         onClick={() =>
           update({
+            // Lands on the first unpriced stretch when there is one, so the usual
+            // reason for pressing this is one tap rather than two dropdowns.
             priceRules: [
               ...config.priceRules,
-              { fromMin: config.openMin, toMin: config.closeMin, price: config.priceRules.at(-1)?.price ?? 800 },
+              gapBands(config.priceRules, config.openMin, config.closeMin, slotMinutes)[0] ?? {
+                fromMin: config.openMin,
+                toMin: config.closeMin,
+                price: UNSET,
+              },
             ],
           })
         }
@@ -786,7 +1049,7 @@ function PriceBands({
         Add band
       </Button>
 
-      {rules.length > 0 ? (
+      {rules.length > 0 && isSet(config.priceRules.at(-1)?.price ?? UNSET) ? (
         <p className="mt-4 text-sm text-ink-600">
           Example: a 2-hour evening booking would cost{" "}
           <strong>{formatCurrency((config.priceRules.at(-1)?.price ?? 0) * 2)}</strong>.
@@ -806,9 +1069,11 @@ function PriceBands({
 function HourlyPricing({
   config,
   update,
+  problems,
 }: {
   config: FacilityConfig;
   update: (patch: Partial<FacilityConfig>) => void;
+  problems: Problems;
 }) {
   const weekend = config.weekendPriceRules ?? [];
   const weekendDays = config.weekendDays ?? [5, 6, 0];
@@ -818,6 +1083,9 @@ function HourlyPricing({
     <>
       <PriceBands
         idPrefix="rule"
+        problemKey="weekday"
+        problems={problems}
+        slotMinutes={config.slotMinutes}
         title={weekendOn ? "Weekday prices" : "Price bands"}
         description={
           weekendOn
@@ -877,7 +1145,9 @@ function HourlyPricing({
                       "h-11 w-14 rounded-lg border text-sm font-semibold transition-colors sm:h-9",
                       on
                         ? "border-pitch-600 bg-pitch-600 text-white"
-                        : "border-ink-200 bg-white text-ink-700 hover:border-pitch-500",
+                        : problems.weekendDays
+                          ? "border-red-400 bg-white text-ink-700"
+                          : "border-ink-200 bg-white text-ink-700 hover:border-pitch-500",
                     )}
                   >
                     {label}
@@ -885,12 +1155,13 @@ function HourlyPricing({
                 );
               })}
             </div>
-            {weekendDays.length === 0 ? (
-              <p className="mt-2 text-sm text-amber-700">Pick at least one day, or turn weekend pricing off.</p>
-            ) : null}
+            {problems.weekendDays ? <FieldError>{problems.weekendDays}</FieldError> : null}
 
             <PriceBands
               idPrefix="weekend-rule"
+              problemKey="weekend"
+              problems={problems}
+              slotMinutes={config.slotMinutes}
               title="Weekend prices"
               description="Charged on the days ticked above. Cover the same hours as the weekday bands."
               rules={weekend}
@@ -917,9 +1188,11 @@ function HourlyPricing({
 function OversPricing({
   config,
   update,
+  problems,
 }: {
   config: FacilityConfig;
   update: (patch: Partial<FacilityConfig>) => void;
+  problems: Problems;
 }) {
   const block = config.oversPerSlot || 10;
   /** A few blocks worth previewing; sessions are not capped at these. */
@@ -933,15 +1206,16 @@ function OversPricing({
           <label className="field-label" htmlFor="overs-per-slot">
             Overs per {config.slotMinutes}-minute block
           </label>
-          <input
+          <PriceInput
             id="overs-per-slot"
-            type="number"
             min={1}
             max={100}
-            className="field-input"
             value={config.oversPerSlot}
-            onChange={(e) => update({ oversPerSlot: Number(e.target.value) })}
+            invalid={Boolean(problems.oversPerSlot)}
+            describedBy={problems.oversPerSlot ? "overs-per-slot-error" : undefined}
+            onChange={(oversPerSlot) => update({ oversPerSlot })}
           />
+          {problems.oversPerSlot ? <FieldError id="overs-per-slot-error">{problems.oversPerSlot}</FieldError> : null}
           <p className="mt-1.5 text-xs text-ink-500">
             This is the whole overs rule. Customers book in multiples of it, and each block costs one ball price.
           </p>
@@ -950,15 +1224,17 @@ function OversPricing({
           <label className="field-label" htmlFor="pay-at-venue">
             Pay at the ground up to
           </label>
-          <input
+          <PriceInput
             id="pay-at-venue"
-            type="number"
             min={0}
-            step={block}
-            className="field-input"
             value={config.payAtVenueMaxOvers}
-            onChange={(e) => update({ payAtVenueMaxOvers: Number(e.target.value) })}
+            invalid={Boolean(problems.payAtVenueMaxOvers)}
+            describedBy={problems.payAtVenueMaxOvers ? "pay-at-venue-error" : undefined}
+            onChange={(payAtVenueMaxOvers) => update({ payAtVenueMaxOvers })}
           />
+          {problems.payAtVenueMaxOvers ? (
+            <FieldError id="pay-at-venue-error">{problems.payAtVenueMaxOvers}</FieldError>
+          ) : null}
           <p className="mt-1.5 text-xs text-ink-500">
             Sessions this size or smaller are confirmed instantly with no online payment — the customer pays you when
             they arrive. Set 0 to always ask for payment first.
@@ -985,6 +1261,7 @@ function OversPricing({
               <input
                 id={`ball-name-${index}`}
                 className="field-input"
+                aria-invalid={problems[`ball-name-${index}`] ? true : undefined}
                 value={ball.name}
                 onChange={(e) => {
                   const balls = [...config.ballTypes];
@@ -999,15 +1276,14 @@ function OversPricing({
               <label className="field-label text-xs" htmlFor={`ball-price-${index}`}>
                 Price per {block} overs
               </label>
-              <input
+              <PriceInput
                 id={`ball-price-${index}`}
-                type="number"
-                min={0}
-                className="field-input"
                 value={ball.pricePerSlot}
-                onChange={(e) => {
+                invalid={Boolean(problems[`ball-price-${index}`])}
+                describedBy={problems[`ball-price-${index}`] ? `ball-price-${index}-error` : undefined}
+                onChange={(pricePerSlot) => {
                   const balls = [...config.ballTypes];
-                  balls[index] = { ...ball, pricePerSlot: Number(e.target.value) };
+                  balls[index] = { ...ball, pricePerSlot };
                   update({ ballTypes: balls });
                 }}
               />
@@ -1022,6 +1298,14 @@ function OversPricing({
             >
               <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
+            {problems[`ball-name-${index}`] || problems[`ball-price-${index}`] ? (
+              <div className="col-span-2 sm:col-span-3">
+                {problems[`ball-name-${index}`] ? <FieldError>{problems[`ball-name-${index}`]}</FieldError> : null}
+                {problems[`ball-price-${index}`] ? (
+                  <FieldError id={`ball-price-${index}-error`}>{problems[`ball-price-${index}`]}</FieldError>
+                ) : null}
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>

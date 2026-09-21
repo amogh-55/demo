@@ -129,6 +129,23 @@ export function Alert({
   );
 }
 
+/**
+ * One field-level complaint, shown under the field it is about.
+ *
+ * Paired with `aria-invalid` on the input: that attribute draws the red outline
+ * (see `.field-input[aria-invalid="true"]`) and announces the state, this says
+ * what is actually wrong. A disabled button with neither is what people read as
+ * a broken page.
+ */
+export function FieldError({ id, children }: { id?: string; children: React.ReactNode }) {
+  return (
+    <p id={id} className="field-error" role="alert">
+      <span aria-hidden="true">!</span>
+      <span>{children}</span>
+    </p>
+  );
+}
+
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="rounded-xl border border-dashed border-white/15 px-6 py-10 text-center theme-light:border-ink-200">

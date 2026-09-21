@@ -62,7 +62,14 @@ function serialise(b: BookingDoc) {
       utr: p.utr ?? null,
       // The key itself is never exposed; the admin only needs to know a screenshot exists.
       hasScreenshot: Boolean(p.screenshotKey),
+      uploadStatus: p.uploadStatus ?? (p.screenshotKey ? "UPLOADED" : "NONE"),
+      uploadFailureReason: p.uploadFailureReason ?? null,
     })),
+    screenshotUploadStatus: b.paymentScreenshotKey
+      ? "UPLOADED"
+      : (b.payments ?? []).some((p) => p.uploadStatus === "FAILED")
+        ? "FAILED"
+        : "NONE",
     hasScreenshot: Boolean(b.paymentScreenshotKey),
     paymentUploadedAt: b.paymentUploadedAt?.toISOString() ?? null,
     rejectionReason: b.rejectionReason,
@@ -217,7 +224,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
               paid: booking.amountPaid,
               remaining: Math.max(0, booking.amount - booking.amountPaid),
             })
-          : confirmationMessage(base);
+          : confirmationMessage({
+              // What was actually received, so a booking confirmed on an advance
+              // tells the customer what is still to pay when they arrive.
+              ...base,
+              paid: booking.amountPaid ?? 0,
+            });
 
     return ok({ url: whatsappUrl(booking.customerPhone, message), message });
   } catch (err) {

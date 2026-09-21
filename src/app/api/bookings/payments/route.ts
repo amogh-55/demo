@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
-import { fail, LAST_BOOKING_COOKIE, ok, readJson } from "@/lib/api";
+import { fail, LAST_BOOKING_COOKIE, ok, readJson, UPLOAD_FAILED_COOKIE } from "@/lib/api";
 import { readSignedCookieValue } from "@/lib/auth";
 import { addPaymentAttempt } from "@/lib/booking/service";
+import { uploadFailureProven } from "@/lib/booking/upload-failure";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -21,7 +22,8 @@ export async function POST(request: Request) {
   try {
     await rateLimit(`balance:${clientIp(request.headers)}`, 20, 60);
 
-    const reference = readSignedCookieValue((await cookies()).get(LAST_BOOKING_COOKIE)?.value);
+    const jar = await cookies();
+    const reference = readSignedCookieValue(jar.get(LAST_BOOKING_COOKIE)?.value);
     if (!reference) throw appError("NOT_FOUND", "We could not find your booking on this device.");
 
     const input = addPaymentSchema.parse(await readJson(request));
@@ -33,6 +35,10 @@ export async function POST(request: Request) {
     const updated = await addPaymentAttempt({
       bookingId: booking._id,
       screenshotKey: input.paymentScreenshotKey,
+      // Once the booking exists there is no hold left, so the reference stands in
+      // as the thing the exemption is bound to. Still signed by this server and
+      // still issued only by the upload route after a genuine store failure.
+      storageFailed: uploadFailureProven(jar.get(UPLOAD_FAILED_COOKIE)?.value, reference),
       utr: input.utr,
     });
 

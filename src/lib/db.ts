@@ -1,5 +1,5 @@
 import "server-only";
-import { MongoClient, type Db, type Collection } from "mongodb";
+import { MongoClient, type CreateIndexesOptions, type Db, type Collection } from "mongodb";
 import type {
   AdminUserDoc,
   AuditLogDoc,
@@ -26,7 +26,25 @@ declare global {
 }
 
 function connect(): { client: MongoClient; ready: Promise<Db> } {
-  const client = new MongoClient(uri!, { maxPoolSize: 10, retryWrites: true });
+  const client = new MongoClient(uri!, {
+    /*
+     * How many database connections one server instance may hold open.
+     *
+     * Every hold and every submission runs inside a transaction, which needs a
+     * connection for its whole duration. At ten, thirty customers booking at once
+     * spend most of their time queueing for one — measured at 2.9s to place a
+     * hold that takes the database 30ms to do.
+     *
+     * Tunable because the right number depends on where this runs: one long-lived
+     * server wants a generous pool, while a serverless deployment multiplies it by
+     * however many instances are warm and has an account-wide ceiling to respect.
+     */
+    maxPoolSize: Number(process.env.MONGODB_POOL_SIZE) || 40,
+    retryWrites: true,
+    // Fail a request rather than let it wait forever for a connection that is
+    // never coming; the customer gets an honest error instead of a hung page.
+    waitQueueTimeoutMS: 10_000,
+  });
   const ready = client.connect().then(async (c) => {
     const db = c.db(dbName);
     await ensureIndexes(db);
@@ -85,6 +103,23 @@ export const collections = {
 let indexesEnsured: Promise<void> | null = null;
 
 /**
+ * Which collection an index belongs to, what it is on, and what it is for.
+ *
+ * Written as data rather than as a list of createIndex calls so the set can be
+ * compared against what the database already has. Building them unconditionally
+ * cost 910ms of every cold start — paid by whichever customer happened to open
+ * the site when a serverless instance booted — on work that does nothing at all
+ * after the first time.
+ */
+interface IndexSpec {
+  collection: keyof typeof collections;
+  /** The name MongoDB stores it under, which is what existence is checked by. */
+  name: string;
+  keys: Record<string, 1 | -1>;
+  options?: CreateIndexesOptions;
+}
+
+/**
  * The unique index on slotUnits is the backbone of double-booking prevention:
  * at most one document may ever exist per (resourceId, date, startMin), so two
  * racing upserts for the same unit can never both insert.
@@ -93,6 +128,80 @@ let indexesEnsured: Promise<void> | null = null;
  * Pickleball Court 1 and Court 2 independently bookable at the same hour, and what
  * lets a bowling machine sell 15-minute units beside a turf selling hours.
  */
+const INDEXES: IndexSpec[] = [
+  { collection: "locations", name: "slug_1", keys: { slug: 1 }, options: { unique: true } },
+  { collection: "locations", name: "active_1_name_1", keys: { active: 1, name: 1 } },
+
+  { collection: "facilities", name: "locationId_1_slug_1", keys: { locationId: 1, slug: 1 }, options: { unique: true } },
+  { collection: "facilities", name: "locationId_1_sortOrder_1", keys: { locationId: 1, sortOrder: 1 } },
+
+  { collection: "resources", name: "facilityId_1_slug_1", keys: { facilityId: 1, slug: 1 }, options: { unique: true } },
+  { collection: "resources", name: "facilityId_1_sortOrder_1", keys: { facilityId: 1, sortOrder: 1 } },
+  { collection: "resources", name: "locationId_1", keys: { locationId: 1 } },
+
+  {
+    collection: "slotUnits",
+    name: "slot_unit_identity_v2",
+    keys: { resourceId: 1, date: 1, startMin: 1 },
+    options: { unique: true },
+  },
+  { collection: "slotUnits", name: "resourceId_1_date_1_status_1", keys: { resourceId: 1, date: 1, status: 1 } },
+  { collection: "slotUnits", name: "locationId_1_date_1_status_1", keys: { locationId: 1, date: 1, status: 1 } },
+  { collection: "slotUnits", name: "holdTokenHash_1", keys: { holdTokenHash: 1 } },
+  { collection: "slotUnits", name: "bookingId_1", keys: { bookingId: 1 } },
+  { collection: "slotUnits", name: "status_1_holdUntil_1", keys: { status: 1, holdUntil: 1 } },
+
+  {
+    collection: "dayBlocks",
+    name: "day_block_identity_v2",
+    keys: { resourceId: 1, date: 1 },
+    options: { unique: true },
+  },
+  // Explicitly named: the auto-generated name would be the one the retired
+  // unique index used, and reusing it is what caused the clash handled below.
+  { collection: "dayBlocks", name: "day_block_by_location", keys: { locationId: 1, date: 1 } },
+
+  { collection: "bookings", name: "reference_1", keys: { reference: 1 }, options: { unique: true } },
+  { collection: "bookings", name: "status_1_createdAt_-1", keys: { status: 1, createdAt: -1 } },
+  { collection: "bookings", name: "locationId_1_date_1", keys: { locationId: 1, date: 1 } },
+  // The dashboard asks "what is on today, across every ground" three times over
+  // — the takings, the list and the upcoming count — and had no index for it.
+  { collection: "bookings", name: "date_1_status_1", keys: { date: 1, status: 1 } },
+  { collection: "bookings", name: "resourceId_1_date_1", keys: { resourceId: 1, date: 1 } },
+  { collection: "bookings", name: "customerPhone_1", keys: { customerPhone: 1 } },
+  { collection: "bookings", name: "createdAt_-1", keys: { createdAt: -1 } },
+
+  { collection: "adminUsers", name: "username_1", keys: { username: 1 }, options: { unique: true } },
+  { collection: "auditLogs", name: "createdAt_-1", keys: { createdAt: -1 } },
+  {
+    collection: "auditLogs",
+    name: "entityType_1_entityId_1_createdAt_-1",
+    keys: { entityType: 1, entityId: 1, createdAt: -1 },
+  },
+
+  {
+    collection: "otpChallenges",
+    name: "expiresAt_1",
+    keys: { expiresAt: 1 },
+    options: { expireAfterSeconds: 0 },
+  },
+  { collection: "rateLimits", name: "expiresAt_1", keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0 } },
+];
+
+/**
+ * Indexes from before facilities existed, which are actively wrong now.
+ *
+ * Both are keyed on locationId. The slotUnits one is unique, so while it exists
+ * it enforces "one booking per ground-hour" across every court and machine at a
+ * ground; the dayBlocks one carries the name the current non-unique index would
+ * otherwise be auto-assigned, so creating that one fails outright with "An
+ * existing index has the same name".
+ */
+const RETIRED: Array<{ collection: keyof typeof collections; name: string }> = [
+  { collection: "slotUnits", name: "slot_unit_identity" },
+  { collection: "dayBlocks", name: "locationId_1_date_1" },
+];
+
 export function ensureIndexes(db: Db): Promise<void> {
   if (!indexesEnsured) {
     indexesEnsured = buildIndexes(db).catch((err) => {
@@ -103,64 +212,46 @@ export function ensureIndexes(db: Db): Promise<void> {
   return indexesEnsured;
 }
 
+/**
+ * Bring the database's indexes up to date, doing nothing when they already are.
+ *
+ * One round trip per collection to read what is there, then work only on the
+ * difference — which on every start after the first is no work at all. The read
+ * is what makes this cheap enough to keep in front of the first request, where
+ * the unique indexes have to be: they are the double-booking guard, and a write
+ * that lands before they exist is a write the database will not refuse.
+ */
 async function buildIndexes(db: Db): Promise<void> {
-  /**
-   * Retire the pre-facility indexes FIRST.
-   *
-   * Both are keyed on locationId, and both are actively wrong now: the unique
-   * slotUnits one would enforce "one booking per ground-hour" across every court
-   * and machine at a ground, and the dayBlocks one carries the name the new
-   * non-unique index would be auto-assigned, so creating that one fails outright
-   * with "An existing index has the same name". Dropping them before anything is
-   * created is what makes this safe to run against a database that predates
-   * facilities. Both are ignored when absent, which is every fresh install.
-   */
-  await Promise.all(
-    [
-      collections.slotUnits(db).dropIndex("slot_unit_identity"),
-      collections.dayBlocks(db).dropIndex("locationId_1_date_1"),
-    ].map((p) => p.catch(() => {})),
+  const names = [...new Set(INDEXES.map((i) => i.collection))];
+  const found = await Promise.all(
+    names.map(async (name) => {
+      try {
+        const list = await collections[name](db).listIndexes().toArray();
+        return [name, new Set(list.map((i) => i.name as string))] as const;
+      } catch {
+        // A collection that does not exist yet has no indexes, which is the
+        // same answer as far as this is concerned.
+        return [name, new Set<string>()] as const;
+      }
+    }),
   );
+  const existing = new Map(found);
 
-  await Promise.all([
-    collections.locations(db).createIndex({ slug: 1 }, { unique: true }),
-    collections.locations(db).createIndex({ active: 1, name: 1 }),
+  const drops = RETIRED.filter((r) => existing.get(r.collection)?.has(r.name));
+  if (drops.length > 0) {
+    // Before the creates: the retired slotUnits index enforces the wrong
+    // uniqueness, and the retired dayBlocks one holds a name that is now taken.
+    await Promise.all(drops.map((r) => collections[r.collection](db).dropIndex(r.name).catch(() => {})));
+  }
 
-    collections.facilities(db).createIndex({ locationId: 1, slug: 1 }, { unique: true }),
-    collections.facilities(db).createIndex({ locationId: 1, sortOrder: 1 }),
+  const missing = INDEXES.filter((spec) => !existing.get(spec.collection)?.has(spec.name));
+  if (missing.length === 0) return;
 
-    collections.resources(db).createIndex({ facilityId: 1, slug: 1 }, { unique: true }),
-    collections.resources(db).createIndex({ facilityId: 1, sortOrder: 1 }),
-    collections.resources(db).createIndex({ locationId: 1 }),
-
-    collections
-      .slotUnits(db)
-      .createIndex({ resourceId: 1, date: 1, startMin: 1 }, { unique: true, name: "slot_unit_identity_v2" }),
-    collections.slotUnits(db).createIndex({ resourceId: 1, date: 1, status: 1 }),
-    collections.slotUnits(db).createIndex({ locationId: 1, date: 1, status: 1 }),
-    collections.slotUnits(db).createIndex({ holdTokenHash: 1 }),
-    collections.slotUnits(db).createIndex({ bookingId: 1 }),
-    collections.slotUnits(db).createIndex({ status: 1, holdUntil: 1 }),
-
-    collections.dayBlocks(db).createIndex({ resourceId: 1, date: 1 }, { unique: true, name: "day_block_identity_v2" }),
-    // Explicitly named: the auto-generated name would be the one the retired
-    // unique index used, and reusing it is what caused the clash above.
-    collections.dayBlocks(db).createIndex({ locationId: 1, date: 1 }, { name: "day_block_by_location" }),
-
-    collections.bookings(db).createIndex({ reference: 1 }, { unique: true }),
-    collections.bookings(db).createIndex({ status: 1, createdAt: -1 }),
-    collections.bookings(db).createIndex({ locationId: 1, date: 1 }),
-    collections.bookings(db).createIndex({ resourceId: 1, date: 1 }),
-    collections.bookings(db).createIndex({ customerPhone: 1 }),
-    collections.bookings(db).createIndex({ createdAt: -1 }),
-
-    collections.adminUsers(db).createIndex({ username: 1 }, { unique: true }),
-    collections.auditLogs(db).createIndex({ createdAt: -1 }),
-    collections.auditLogs(db).createIndex({ entityType: 1, entityId: 1, createdAt: -1 }),
-
-    collections.otpChallenges(db).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    collections.rateLimits(db).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-  ]);
+  await Promise.all(
+    missing.map((spec) =>
+      collections[spec.collection](db).createIndex(spec.keys as never, { name: spec.name, ...spec.options }),
+    ),
+  );
 }
 
 /** MongoDB duplicate-key error — in this app it always means "someone else owns that unit". */

@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { api, errorMessage } from "@/lib/client";
-import { formatBusinessDate, formatMinutes, formatRange } from "@/lib/time";
+import { ChevronDown } from "lucide-react";
+import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange } from "@/lib/time";
 import { Alert, Button, Spinner, StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
@@ -21,6 +22,13 @@ interface DayResponse {
   facility: { id: string; name: string; kind: string; active: boolean };
   resource: { id: string; name: string; active: boolean };
   date: string;
+  config: {
+    openMin: number;
+    closeMin: number;
+    slotMinutes: number;
+    oversPerSlot: number;
+    ballTypes: Array<{ id: string; name: string; pricePerSlot: number }>;
+  };
   dayBlock: { reason: string; blockedBy: string } | null;
   units: DayUnit[];
 }
@@ -54,6 +62,64 @@ interface BlockResponse {
 }
 
 const BLOCK_REASONS = ["Tournament", "Maintenance", "Private event", "Weather"];
+
+/**
+ * Whether a slot may be picked for blocking or re-opening.
+ *
+ * BOOKED means a confirmed booking owns it, and the server refuses to block over
+ * one under any circumstances — not even with `force`. Offering it as a choice
+ * only produced a refusal after the owner had picked a reason and pressed Block,
+ * so the grid says no where the answer is actually decided.
+ */
+function isSelectable(unit: DayUnit | undefined): boolean {
+  return Boolean(unit) && unit!.status !== "BOOKED";
+}
+
+/** One slot in the grid. Extracted because the flat list and the hour accordion draw the same thing. */
+function SlotTile({
+  unit,
+  selected,
+  priceLabel,
+  onClick,
+}: {
+  unit: DayUnit;
+  selected: boolean;
+  priceLabel: string;
+  onClick: () => void;
+}) {
+  const selectable = isSelectable(unit);
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      disabled={!selectable}
+      onClick={onClick}
+      title={selectable ? undefined : "Confirmed bookings cannot be blocked"}
+      className={cn(
+        "w-full rounded-lg border p-3 text-left transition-colors",
+        !selectable
+          ? "cursor-not-allowed border-ink-200 bg-ink-50 opacity-70"
+          : selected
+            ? "border-pitch-600 ring-2 ring-pitch-600"
+            : "border-ink-200 hover:bg-ink-50",
+      )}
+    >
+      {/* Two columns on a 320px phone leave no room for time and badge side by
+          side, so the badge is allowed to drop onto its own line. */}
+      <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <span className="text-sm font-semibold text-ink-900">{formatMinutes(unit.startMin)}</span>
+        <StatusBadge status={unit.status} />
+      </span>
+      <span className="mt-1 block text-xs text-ink-500">{priceLabel}</span>
+      {unit.booking ? (
+        <span className="mt-1 block truncate text-xs text-ink-600">
+          {unit.booking.customerName} · {unit.booking.reference}
+        </span>
+      ) : null}
+      {unit.blockReason ? <span className="mt-1 block truncate text-xs text-ink-600">{unit.blockReason}</span> : null}
+    </button>
+  );
+}
 
 export function AvailabilityManager({
   locations,
@@ -119,7 +185,57 @@ export function AvailabilityManager({
     void load();
   }, [load]);
 
-  const units = day?.units ?? [];
+  // Memoised because the hour grouping below depends on it: a fresh [] on every
+  // render would rebuild those groups on every render too.
+  const units = React.useMemo(() => day?.units ?? [], [day]);
+
+  /* ── How the day is drawn ──────────────────────────────────────────────
+   * A quarter-hour facility produces 68 buttons for one day, which is a wall
+   * rather than a list. Those are grouped into the hour people speak in and
+   * only the open hour shows its quarters. An hourly facility is short enough
+   * to show flat, so it still is.
+   */
+  const slotMinutes = day?.config?.slotMinutes ?? 60;
+  const splitByQuarter = slotMinutes < 60;
+  const [openHour, setOpenHour] = React.useState<number | null>(null);
+
+  const hourGroups = React.useMemo(() => {
+    const groups = new Map<number, DayUnit[]>();
+    for (const unit of units) {
+      const hour = Math.floor(unit.startMin / 60) * 60;
+      groups.set(hour, [...(groups.get(hour) ?? []), unit]);
+    }
+    return [...groups.entries()].map(([hour, own]) => ({ hour, units: own }));
+  }, [units]);
+
+  /** The open hour, plus any hour holding part of the current selection. */
+  const expandedHours = React.useMemo(() => {
+    const hours = new Set<number>();
+    if (openHour !== null) hours.add(openHour);
+    for (const startMin of selected) hours.add(Math.floor(startMin / 60) * 60);
+    return hours;
+  }, [openHour, selected]);
+
+  /**
+   * What one unit costs, said in the way the facility is actually sold.
+   *
+   * An OVERS facility prices every unit at 0 and puts the money on the ball
+   * type, so the raw number is a true and completely useless "₹0". The owner
+   * needs to see what a block of overs costs them to sell.
+   */
+  const priceLabel = React.useCallback(
+    (unit: DayUnit): string => {
+      const balls = day?.config?.ballTypes ?? [];
+      if (day?.facility.kind !== "OVERS" || balls.length === 0) return formatCurrency(unit.price);
+      const overs = day.config.oversPerSlot || 0;
+      const cheapest = Math.min(...balls.map((b) => b.pricePerSlot));
+      const dearest = Math.max(...balls.map((b) => b.pricePerSlot));
+      const money = cheapest === dearest ? formatCurrency(cheapest) : `${formatCurrency(cheapest)}–${formatCurrency(dearest)}`;
+      return overs > 0 ? `${money} / ${overs} overs` : money;
+    },
+    [day],
+  );
+
   const selectedRange =
     selected.length > 0
       ? {
@@ -135,6 +251,10 @@ export function AvailabilityManager({
    * click that would leave a gap starts a fresh selection instead.
    */
   function toggle(startMin: number) {
+    // A confirmed booking can never be blocked over, so it is not selectable.
+    // Letting it be picked only moved the refusal to the confirmation dialog,
+    // after the owner had already chosen a reason and pressed Block.
+    if (!isSelectable(units.find((u) => u.startMin === startMin))) return;
     setSelected((current) => {
       if (current.length === 0) return [startMin];
 
@@ -365,41 +485,72 @@ export function AvailabilityManager({
           <p className="mt-5 text-sm text-ink-500">No slots configured for this facility.</p>
         ) : (
           <>
-            <p className="mt-2 text-sm text-ink-600">Select slots to block or re-open. Confirmed bookings cannot be blocked.</p>
-            <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {units.map((unit) => {
-                const isSelected = selected.includes(unit.startMin);
-                return (
-                  <li key={unit.startMin}>
-                    <button
-                      type="button"
-                      aria-pressed={isSelected}
-                      onClick={() => toggle(unit.startMin)}
-                      className={cn(
-                        "w-full rounded-lg border p-3 text-left transition-colors",
-                        isSelected ? "border-pitch-600 ring-2 ring-pitch-600" : "border-ink-200 hover:bg-ink-50",
-                      )}
-                    >
-                      {/* Two columns on a 320px phone leave no room for time and badge side by
-                          side, so the badge is allowed to drop onto its own line. */}
-                      <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                        <span className="text-sm font-semibold text-ink-900">{formatMinutes(unit.startMin)}</span>
-                        <StatusBadge status={unit.status} />
-                      </span>
-                      <span className="mt-1 block text-xs text-ink-500">{formatCurrency(unit.price)}</span>
-                      {unit.booking ? (
-                        <span className="mt-1 block truncate text-xs text-ink-600">
-                          {unit.booking.customerName} · {unit.booking.reference}
+            <p className="mt-2 text-sm text-ink-600">
+              Select slots to block or re-open. Slots with a confirmed booking are shown greyed and cannot be selected.
+            </p>
+            {splitByQuarter ? (
+              /* A bowling machine sells quarter-hours, so a day is 68 buttons. Grouped
+                 by the hour people actually speak in, with only the open hour showing
+                 its quarters — the same shape the phone-booking dialog uses. */
+              <div className="mt-4 space-y-1.5">
+                {hourGroups.map(({ hour, units: own }) => {
+                  const openNow = expandedHours.has(hour);
+                  const free = own.filter((u) => u.status === "AVAILABLE").length;
+                  const selectedHere = own.filter((u) => selected.includes(u.startMin)).length;
+                  return (
+                    <div key={hour} className="overflow-hidden rounded-lg border border-ink-200 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setOpenHour(openNow && selectedHere === 0 ? null : hour)}
+                        aria-expanded={openNow}
+                        className="flex h-12 w-full items-center justify-between gap-2 px-3 text-sm font-semibold text-ink-800 hover:bg-ink-50"
+                      >
+                        <span>{formatCompactRange(hour, hour + 60)}</span>
+                        <span className="flex items-center gap-2 text-xs font-medium text-ink-500">
+                          {selectedHere > 0 ? (
+                            <span className="rounded-full bg-pitch-600 px-2 py-0.5 text-white">
+                              {selectedHere} picked
+                            </span>
+                          ) : null}
+                          {free === own.length ? "all free" : free === 0 ? "none free" : `${free} of ${own.length} free`}
+                          <ChevronDown
+                            className={cn("h-4 w-4 transition-transform", openNow && "rotate-180")}
+                            aria-hidden="true"
+                          />
                         </span>
+                      </button>
+                      {openNow ? (
+                        <ul className="grid grid-cols-2 gap-1.5 border-t border-ink-100 p-2 sm:grid-cols-4">
+                          {own.map((unit) => (
+                            <li key={unit.startMin}>
+                              <SlotTile
+                                unit={unit}
+                                selected={selected.includes(unit.startMin)}
+                                priceLabel={priceLabel(unit)}
+                                onClick={() => toggle(unit.startMin)}
+                              />
+                            </li>
+                          ))}
+                        </ul>
                       ) : null}
-                      {unit.blockReason ? (
-                        <span className="mt-1 block truncate text-xs text-ink-600">{unit.blockReason}</span>
-                      ) : null}
-                    </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {units.map((unit) => (
+                  <li key={unit.startMin}>
+                    <SlotTile
+                      unit={unit}
+                      selected={selected.includes(unit.startMin)}
+                      priceLabel={priceLabel(unit)}
+                      onClick={() => toggle(unit.startMin)}
+                    />
                   </li>
-                );
-              })}
-            </ul>
+                ))}
+              </ul>
+            )}
 
             {selectedRange ? (
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-ink-200 bg-ink-50 p-4">

@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { recordAudit, requireAdmin } from "@/lib/auth";
-import { defaultConfigFor } from "@/lib/booking/service";
+import { defaultConfigFor, forgetResourceContext } from "@/lib/booking/service";
 import { collections, getDb, isDuplicateKeyError } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { facilityCreateSchema } from "@/lib/validation";
@@ -19,6 +19,10 @@ export async function GET() {
       collections.resources(db).find({}).sort({ sortOrder: 1, name: 1 }).toArray(),
     ]);
 
+    // The cached resource context still describes this as it was, so it is
+    // dropped now the write has landed — the owner sees their own edit at
+    // once rather than whenever the short TTL happens to lapse.
+    forgetResourceContext();
     return ok({
       locations: locations.map((l) => ({ id: l._id.toHexString(), name: l.name, active: l.active })),
       facilities: facilities.map((f) => ({
@@ -97,6 +101,10 @@ export async function POST(request: Request) {
       kind: input.kind,
       locationId: locationId.toHexString(),
     });
+    // The cached resource context still describes this as it was, so it is
+    // dropped now the write has landed — the owner sees their own edit at
+    // once rather than whenever the short TTL happens to lapse.
+    forgetResourceContext();
     return ok({ id: _id.toHexString() });
   } catch (err) {
     return fail(err, { route: "POST /api/admin/facilities" });

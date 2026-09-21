@@ -29,10 +29,37 @@ export type PaymentStatus = "PENDING" | "PARTIAL" | "VERIFIED" | "REJECTED";
 export type FacilityKind = "HOURLY" | "OVERS";
 
 /** One screenshot the customer sent. A booking may collect several. */
+/**
+ * What became of the screenshot behind a payment.
+ *
+ * UPLOADED — the image is in the store and can be opened.
+ * FAILED   — the customer chose a valid image, the storage provider could not
+ *            take it, and the booking went through on the UTR alone. The owner
+ *            must check this one against the bank statement by hand.
+ * NONE     — there was never an image to upload: an admin recorded this payment,
+ *            or the session is paid for at the ground.
+ */
+export type ScreenshotUploadStatus = "UPLOADED" | "FAILED" | "NONE";
+
+/**
+ * Why an upload did not happen. Only ever set alongside FAILED, and only ever
+ * for an infrastructure fault — a file the customer chose badly is refused
+ * outright and never reaches a booking at all.
+ */
+export type ScreenshotFailureReason = "STORAGE_UNAVAILABLE";
+
 export interface PaymentAttempt {
   id: string;
   /** Null when an admin recorded the payment themselves, or when the upload failed. */
   screenshotKey: string | null;
+  /**
+   * Which of the three happened. Kept explicitly rather than inferred from
+   * `screenshotKey === null`, because "the provider was down" and "there was
+   * never a screenshot" are the same absence and completely different problems.
+   */
+  uploadStatus: ScreenshotUploadStatus;
+  /** Set only with FAILED. */
+  uploadFailureReason: ScreenshotFailureReason | null;
   /**
    * The 12-digit UPI reference the customer typed, which is what the owner
    * actually matches against the bank statement.

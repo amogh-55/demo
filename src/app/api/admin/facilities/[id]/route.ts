@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { recordAudit, requireAdmin } from "@/lib/auth";
+import { forgetResourceContext } from "@/lib/booking/service";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { facilityConfigSchema, facilityUpdateSchema } from "@/lib/validation";
@@ -31,6 +32,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (!updated) throw appError("NOT_FOUND", "That facility does not exist.");
 
     await recordAudit(admin, "FACILITY_UPDATED", "facility", id.toHexString(), { fields: Object.keys(patch) });
+    // The cached resource context still describes this as it was, so it is
+    // dropped now the write has landed — the owner sees their own edit at
+    // once rather than whenever the short TTL happens to lapse.
+    forgetResourceContext();
     return ok({ facility: { id: updated._id.toHexString(), name: updated.name, active: updated.active } });
   } catch (err) {
     return fail(err, { route: "PATCH /api/admin/facilities/[id]" });
@@ -94,6 +99,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       payAtVenueMaxOvers: config.payAtVenueMaxOvers,
     });
 
+    // The cached resource context still describes this as it was, so it is
+    // dropped now the write has landed — the owner sees their own edit at
+    // once rather than whenever the short TTL happens to lapse.
+    forgetResourceContext();
     return ok({ saved: true, config });
   } catch (err) {
     return fail(err, { route: "PUT /api/admin/facilities/[id]" });

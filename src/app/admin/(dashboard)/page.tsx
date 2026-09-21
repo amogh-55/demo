@@ -175,7 +175,14 @@ export default async function AdminDashboardPage({
                 >
                   <span className="min-w-0">
                     <span className="block break-words font-medium text-ink-900">{b.customerName}</span>
-                    <span className="block text-xs text-ink-500">{b.locationName}</span>
+                    {/* Which court, not just which ground. Two customers on the two
+                        pickleball courts at noon read as the same booking twice
+                        when only the ground is named. */}
+                    <span className="block break-words text-xs text-ink-500">
+                      {[b.locationName, b.facilityName, b.resourceName !== b.facilityName ? b.resourceName : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-3 text-sm">
                     {/* The whole slot, not just its start — same reason as the customer grid. */}

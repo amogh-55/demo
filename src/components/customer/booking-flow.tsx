@@ -4,11 +4,11 @@ import * as React from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, ChevronDown, Clock, Copy, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
-import { api, errorMessage } from "@/lib/client";
+import { ApiError, api, errorMessage } from "@/lib/client";
 import { hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto } from "@/lib/photos";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
-import { Alert, Button, EmptyState, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
+import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
 
 export interface PublicResource {
@@ -100,10 +100,35 @@ const AVAILABILITY_REFRESH_MS = 20_000;
 /** How long a "slot just taken" notice stays up before clearing itself. */
 const CONFLICT_NOTICE_MS = 8_000;
 
-/** Adds days to a "YYYY-MM-DD" business date without touching the browser clock. */
+/**
+ * The screenshot limits, mirrored from the server.
+ *
+ * The server enforces both again from the bytes it actually receives — a browser
+ * check is a courtesy that saves a customer a slow upload, never the rule.
+ */
+const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
+const ALLOWED_SCREENSHOT_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+/** "6.2 MB", so an oversized file can be told how oversized it is. */
+function formatFileSize(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * Adds days to a "YYYY-MM-DD" business date without touching the browser clock.
+ *
+ * Total on purpose. `Date.UTC` with a NaN anywhere in it produces an Invalid
+ * Date, and `toISOString` on one throws a RangeError — which, thrown from a
+ * render, is the whole page replaced by "a client-side exception has occurred".
+ * One facility carrying a `bookingWindowDays` this file never saw was enough,
+ * because `Math.max` over it is NaN. The window falls back to the date itself,
+ * which narrows the picker rather than destroying the page.
+ */
 function addDays(date: string, days: number): string {
   const [y, m, d] = date.split("-").map(Number);
-  return new Date(Date.UTC(y!, m! - 1, d! + days)).toISOString().slice(0, 10);
+  if (![y, m, d, days].every((n) => Number.isFinite(n))) return date;
+  const shifted = new Date(Date.UTC(y!, m! - 1, d! + days));
+  return Number.isNaN(shifted.getTime()) ? date : shifted.toISOString().slice(0, 10);
 }
 
 const normalisePhone = (raw: string) => raw.replace(/\D/g, "").slice(-10);
@@ -174,6 +199,17 @@ export function BookingFlow({
   const [preview, setPreview] = React.useState<string | null>(null);
   const [screenshotKey, setScreenshotKey] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
+  /**
+   * Why the chosen file is not uploaded.
+   *
+   * The two are treated completely differently and must never be conflated:
+   * something the customer can fix blocks the booking until they fix it, while
+   * our storage being down does not cost them a booking they have already paid
+   * for. The server decides which is which — this only mirrors its answer.
+   */
+  const [uploadProblem, setUploadProblem] = React.useState<
+    { kind: "FILE"; message: string } | { kind: "STORAGE"; message: string } | null
+  >(null);
   /** The 12-digit UPI reference. This, not the image, is what a booking needs. */
   const [utr, setUtr] = React.useState("");
   const utrDigits = utr.replace(/\D/g, "");
@@ -203,8 +239,23 @@ export function BookingFlow({
 
   /* ── Availability ──────────────────────────────────────────────────── */
 
+  /**
+   * The request this component is currently waiting on.
+   *
+   * Every reply checks it before touching state, so a slow answer for a date the
+   * customer has already moved away from is dropped instead of overwriting the
+   * one they are looking at. Without this a stale *failure* was the worst case:
+   * an abandoned past date — which an iOS date wheel produces on its way to the
+   * date being aimed at — printed "That date has already passed" over a perfectly
+   * good future one, and only a reload cleared it.
+   */
+  const availabilityRequest = React.useRef(0);
+
   const loadAvailability = React.useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!resourceId || !date) return;
+    const ticket = (availabilityRequest.current += 1);
+    const current = () => availabilityRequest.current === ticket;
+
     // A background poll must not blank the grid the customer is reading.
     if (!silent) setLoadingAvailability(true);
     setAvailabilityError(null);
@@ -212,16 +263,16 @@ export function BookingFlow({
       const data = await api<AvailabilityResponse>(
         `/api/availability?resourceId=${encodeURIComponent(resourceId)}&date=${encodeURIComponent(date)}`,
       );
-      setAvailability(data);
+      if (current()) setAvailability(data);
     } catch (err) {
       // A failed background poll leaves the last good list on screen; the hold
       // attempt is re-checked server-side anyway.
-      if (!silent) {
+      if (!silent && current()) {
         setAvailability(null);
         setAvailabilityError(errorMessage(err));
       }
     } finally {
-      if (!silent) setLoadingAvailability(false);
+      if (!silent && current()) setLoadingAvailability(false);
     }
   }, [resourceId, date]);
 
@@ -533,40 +584,72 @@ export function BookingFlow({
     }
   }
 
+  async function uploadScreenshot(chosen: File) {
+    setUploading(true);
+    setUploadProblem(null);
+    try {
+      const form = new FormData();
+      form.append("file", chosen);
+      const result = await api<{ key: string }>("/api/uploads", { method: "POST", body: form });
+      setScreenshotKey(result.key);
+    } catch (err) {
+      setScreenshotKey(null);
+      /*
+       * UPLOAD_FAILED is the storage provider, and only then may the booking go
+       * through without the image. Everything else — a file too large for the
+       * server, the wrong type, a truncated body — is the customer's to fix, and
+       * the Book button stays shut until they do.
+       */
+      const storage = err instanceof ApiError && err.code === "UPLOAD_FAILED";
+      setUploadProblem(
+        storage
+          ? {
+              kind: "STORAGE",
+              message:
+                "We are having trouble uploading the payment screenshot right now. " +
+                "Please enter your UTR number below so we can verify the payment manually.",
+            }
+          : { kind: "FILE", message: errorMessage(err) },
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const chosen = event.target.files?.[0];
     event.target.value = ""; // allows re-picking the same file after a failure
     if (!chosen) return;
 
     setError(null);
-    if (!["image/jpeg", "image/png", "image/webp"].includes(chosen.type)) {
-      setError("Please upload a JPG, PNG or WebP screenshot.");
+    setScreenshotKey(null);
+
+    // Checked here so an obviously wrong file never costs the customer an upload
+    // on a phone connection. The server checks the same two things again from the
+    // bytes themselves, because this check is a courtesy and that one is the rule.
+    if (!ALLOWED_SCREENSHOT_TYPES.includes(chosen.type)) {
+      setFile(null);
+      setUploadProblem({ kind: "FILE", message: "Please upload a JPG, PNG or WebP screenshot." });
       return;
     }
-    if (chosen.size > 5 * 1024 * 1024) {
-      setError("That image is larger than 5MB. Please upload a smaller screenshot.");
+    if (chosen.size > MAX_SCREENSHOT_BYTES) {
+      setFile(null);
+      setUploadProblem({
+        kind: "FILE",
+        message: `Payment screenshot must be less than 5 MB. Please upload a smaller file. (Yours is ${formatFileSize(chosen.size)}.)`,
+      });
+      return;
+    }
+    if (chosen.size === 0) {
+      setFile(null);
+      setUploadProblem({ kind: "FILE", message: "That file is empty. Please choose the screenshot again." });
       return;
     }
 
     if (preview) URL.revokeObjectURL(preview);
     setFile(chosen);
     setPreview(URL.createObjectURL(chosen));
-    setScreenshotKey(null);
-
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("file", chosen);
-      const result = await api<{ key: string }>("/api/uploads", { method: "POST", body: form });
-      setScreenshotKey(result.key);
-    } catch {
-      // Not surfaced as an error: the booking goes through on the UTR, and a red
-      // banner here would send a customer who has already paid away from the
-      // screen. The upload panel says what happened, calmly.
-      setScreenshotKey(null);
-    } finally {
-      setUploading(false);
-    }
+    await uploadScreenshot(chosen);
   }
 
   function clearFile() {
@@ -574,12 +657,13 @@ export function BookingFlow({
     setFile(null);
     setPreview(null);
     setScreenshotKey(null);
+    setUploadProblem(null);
   }
 
   async function submitBooking() {
-    // A pay-at-the-ground session has nothing to pay for here; every other booking
-    // needs its UPI reference. The server decides which it is regardless of this.
-    if (submitting || (!utrValid && !hold?.payAtVenue)) return;
+    // The server decides all of this again from the hold and its own records;
+    // this only stops a request that is certain to be refused.
+    if (submitting || !canSubmitPayment) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -600,7 +684,48 @@ export function BookingFlow({
   }
 
   const phoneVerified = !otpEnabled || verifiedPhone === normalisePhone(phone);
-  const detailsValid = name.trim().length >= 2 && phoneLooksValid(phone) && phoneVerified;
+  /**
+   * What is wrong with the details, per field.
+   *
+   * These used to be invisible: the button simply sat there disabled, so a
+   * customer who typed a single-letter name had nothing at all telling them why
+   * nothing happened when they pressed it.
+   */
+  const nameProblem = name.trim().length === 0
+    ? "Enter your name so we know who the booking is for."
+    : name.trim().length < 2
+      ? "Please enter your full name — at least 2 letters."
+      : null;
+  const phoneProblem = phone.trim().length === 0
+    ? "Enter the mobile number we should reach you on."
+    : !phoneLooksValid(phone)
+      ? "Enter a 10-digit Indian mobile number, starting 6, 7, 8 or 9."
+      : null;
+
+  const detailsValid = !nameProblem && !phoneProblem && phoneVerified;
+
+  /**
+   * Whether the payment step may be submitted, and if not, what is missing.
+   *
+   * A screenshot is required. The single exception is a storage failure, where
+   * the image was fine and we could not take it — refusing the booking then would
+   * charge a customer who has already paid for our own outage.
+   */
+  const storageIsDown = uploadProblem?.kind === "STORAGE";
+  const paymentProblem = hold?.payAtVenue
+    ? null
+    : !utrValid
+      ? utrDigits.length === 0
+        ? "Enter the 12-digit UTR from your payment app."
+        : `The UTR is 12 digits — you have entered ${utrDigits.length}.`
+      : uploading
+        ? "Waiting for the screenshot to finish uploading…"
+        : uploadProblem?.kind === "FILE"
+          ? uploadProblem.message
+          : !screenshotKey && !storageIsDown
+            ? "Please upload a screenshot of your payment."
+            : null;
+  const canSubmitPayment = !paymentProblem && !holdExpired;
 
   /* ── Render ────────────────────────────────────────────────────────── */
 
@@ -790,8 +915,20 @@ export function BookingFlow({
                 value={date}
                 min={today}
                 max={addDays(today, bookingWindowDays)}
-                // Clearing the field would leave the grid showing another day's slots.
-                onChange={(e) => setDate(e.target.value || today)}
+                /*
+                 * `min` and `max` are only hints: the iOS wheel scrolls straight
+                 * past both, and every intermediate date it passes through fires
+                 * a change. So the clamp is real rather than advisory — ISO dates
+                 * compare correctly as strings — and a date outside the window is
+                 * never requested at all. Clearing the field would leave the grid
+                 * showing another day's slots, so that lands on today too.
+                 */
+                onChange={(e) => {
+                  const picked = e.target.value;
+                  const latest = addDays(today, bookingWindowDays);
+                  if (!picked) return setDate(today);
+                  setDate(picked < today ? today : picked > latest ? latest : picked);
+                }}
               />
               <p className="mt-1.5 text-xs text-ink-400">{formatBusinessDate(date)} · times shown in IST</p>
             </div>
@@ -1200,7 +1337,14 @@ export function BookingFlow({
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Your name"
                     required
+                    // Only once they have typed something: a red box on a field
+                    // nobody has reached yet is a telling-off, not a hint.
+                    aria-invalid={nameProblem && name.length > 0 ? true : undefined}
+                    aria-describedby={nameProblem && name.length > 0 ? "customer-name-error" : undefined}
                   />
+                  {nameProblem && name.length > 0 ? (
+                    <FieldError id="customer-name-error">{nameProblem}</FieldError>
+                  ) : null}
                 </div>
                 <div>
                   <label className="field-label" htmlFor="customer-phone">
@@ -1223,8 +1367,14 @@ export function BookingFlow({
                     }}
                     placeholder="10-digit mobile number"
                     required
+                    aria-invalid={phoneProblem && phone.length > 0 ? true : undefined}
+                    aria-describedby={phoneProblem && phone.length > 0 ? "customer-phone-error" : undefined}
                   />
-                  <p className="mt-1.5 text-xs text-ink-400">We will confirm your booking on WhatsApp.</p>
+                  {phoneProblem && phone.length > 0 ? (
+                    <FieldError id="customer-phone-error">{phoneProblem}</FieldError>
+                  ) : (
+                    <p className="mt-1.5 text-xs text-ink-400">We will confirm your booking on WhatsApp.</p>
+                  )}
                 </div>
               </div>
 
@@ -1293,9 +1443,18 @@ export function BookingFlow({
                 </div>
               ) : null}
 
+              {/* Named here as well as under the field. On a phone the keyboard
+                  covers the inputs, so the only thing the customer can see when
+                  they reach for the button is the button. */}
+              {!detailsValid && (name.length > 0 || phone.length > 0) ? (
+                <p className="mt-4 text-sm font-medium text-amber-300">
+                  {nameProblem ?? phoneProblem ?? "Verify your mobile number to continue."}
+                </p>
+              ) : null}
+
               <Button
                 size="lg"
-                className="mt-5 w-full sm:w-auto"
+                className="mt-3 w-full sm:w-auto"
                 disabled={!detailsValid || holdExpired}
                 onClick={() => setStep("payment")}
               >
@@ -1441,7 +1600,7 @@ export function BookingFlow({
                 <h2 id="upload-heading" className="text-lg font-semibold text-white">
                   Add your payment screenshot
                 </h2>
-                <p className="mt-1 text-sm text-ink-400">JPG, PNG or WebP · up to 5MB</p>
+                <p className="mt-1 text-sm text-ink-400">JPG, PNG or WebP · up to 5 MB · required</p>
 
                 {!file ? (
                   <label className="mt-4 flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-white/15 px-6 py-8 text-center hover:bg-white/5">
@@ -1458,7 +1617,7 @@ export function BookingFlow({
                     ) : null}
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-ink-200">{file.name}</p>
-                      <p className="mt-0.5 text-xs text-ink-400">{(file.size / 1024).toFixed(0)} KB</p>
+                      <p className="mt-0.5 text-xs text-ink-400">{formatFileSize(file.size)}</p>
                       <p className="mt-2 text-sm">
                         {uploading ? (
                           <span className="flex items-center gap-2 text-ink-400">
@@ -1468,23 +1627,70 @@ export function BookingFlow({
                           <span className="flex items-center gap-1.5 font-medium text-lime-400">
                             <Check className="h-4 w-4" aria-hidden="true" /> Uploaded
                           </span>
+                        ) : storageIsDown ? (
+                          <span className="text-amber-300">Could not be uploaded — see below.</span>
                         ) : (
-                          // A failed upload no longer costs anybody their slot, so it is
-                          // said plainly and without alarm — the money is traced by the
-                          // UTR either way.
-                          <span className="text-ink-300">
-                            The image did not go through — no problem, we will match your payment by the UTR
-                            above. Please double-check that number is typed correctly.
-                          </span>
+                          <span className="text-red-300">Not uploaded.</span>
                         )}
                       </p>
-                      <Button variant="ghost" className="mt-2 -ml-4" onClick={clearFile} disabled={uploading}>
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                        Remove
-                      </Button>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {/* Offered on any failure. A store that was down a moment
+                            ago is often back, and the customer would rather send
+                            the image than have it checked by hand. */}
+                        {!uploading && !screenshotKey ? (
+                          <Button variant="secondary" size="sm" onClick={() => void uploadScreenshot(file)}>
+                            Try again
+                          </Button>
+                        ) : null}
+                        {/*
+                          A label rather than a button, so it opens the picker
+                          itself. The file input used to exist only in the empty
+                          dropzone, which meant that once a file was chosen and
+                          then refused — a PDF the browser had labelled a PNG, say
+                          — there was nothing on screen that would open the picker
+                          again without first clearing the one that failed.
+                        */}
+                        <label
+                          className={cn(
+                            "inline-flex h-9 cursor-pointer items-center gap-2 rounded-full px-3 text-sm font-semibold text-ink-300 transition-colors hover:bg-white/10",
+                            uploading && "pointer-events-none opacity-60",
+                          )}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          Choose another
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            className="sr-only"
+                            disabled={uploading}
+                            onChange={onFileChange}
+                          />
+                        </label>
+                      </div>
                     </div>
                   </div>
                 )}
+
+                {/*
+                  The two failures look nothing alike on purpose. One is a
+                  problem with the file, which the customer fixes and the booking
+                  waits for. The other is ours, which must not cost them a booking
+                  they have already paid for.
+                */}
+                {uploadProblem?.kind === "FILE" ? (
+                  <Alert tone="error" className="mt-4">
+                    {uploadProblem.message}
+                  </Alert>
+                ) : null}
+                {storageIsDown ? (
+                  <Alert tone="warning" className="mt-4">
+                    <p className="font-semibold">{uploadProblem.message}</p>
+                    <p className="mt-1">
+                      Your slot is still held. We will match your payment against the UTR above, so please check
+                      that number is typed exactly right.
+                    </p>
+                  </Alert>
+                ) : null}
               </section>
 
               <section className="card" aria-labelledby="confirm-heading">
@@ -1499,6 +1705,10 @@ export function BookingFlow({
                   <Row label="Date" value={formatBusinessDate(hold.date)} />
                   <Row label="Time" value={formatRange(hold.startMin, hold.endMin)} />
                   <Row label="UTR" value={utrValid ? utrDigits : "Not entered yet"} />
+                  <Row
+                    label="Screenshot"
+                    value={screenshotKey ? "Uploaded" : storageIsDown ? "Will be checked by hand" : "Not uploaded"}
+                  />
                   <Row label="Amount paid" value={formatCurrency(hold.amount)} strong />
                 </dl>
 
@@ -1512,10 +1722,16 @@ export function BookingFlow({
                   </Alert>
                 ) : null}
 
+                {/* A disabled button with no explanation is the thing customers
+                    read as a broken site, so it always says what it is waiting for. */}
+                {paymentProblem && !submitting ? (
+                  <p className="mt-4 text-sm font-medium text-amber-300">{paymentProblem}</p>
+                ) : null}
+
                 <Button
-                  className="mt-4 w-full"
+                  className="mt-3 w-full"
                   size="lg"
-                  disabled={!utrValid || uploading || submitting || holdExpired}
+                  disabled={!canSubmitPayment || submitting}
                   onClick={submitBooking}
                 >
                   {submitting ? <Spinner /> : null}

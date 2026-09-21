@@ -11,10 +11,10 @@ export async function POST(request: Request) {
   try {
     // Two limits: one per source address, one per account, so neither a single
     // attacker nor a distributed one can grind a password.
-    await rateLimit(`login-ip:${ip}`, 10, 300);
+    await rateLimit(`login-ip:${ip}`, 10, 300, { shared: true });
 
     const input = adminLoginSchema.parse(await readJson(request));
-    await rateLimit(`login-user:${input.username.toLowerCase()}`, 8, 300);
+    await rateLimit(`login-user:${input.username.toLowerCase()}`, 8, 300, { shared: true });
 
     const session = await authenticateAdmin(input.username.toLowerCase(), input.password);
     // Deliberately identical response whether the username exists or not.

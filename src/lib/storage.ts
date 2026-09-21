@@ -10,6 +10,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { appError } from "./errors";
 import { SCREENSHOT_KEY_PATTERN } from "./validation";
 import { log } from "./log";
@@ -73,6 +74,28 @@ function client(): S3Client {
     endpoint: STORAGE_ENDPOINT || undefined,
     forcePathStyle: Boolean(STORAGE_ENDPOINT),
     credentials: { accessKeyId: STORAGE_ACCESS_KEY, secretAccessKey: STORAGE_SECRET_KEY },
+    /*
+     * A provider that hangs must fail quickly rather than hold a customer's
+     * booking open.
+     *
+     * Without this a bucket that accepts the connection and then goes quiet hangs
+     * the upload request for as long as the customer is willing to sit there — and
+     * they have already sent the money. Ten seconds is comfortably longer than a
+     * 5MB PUT to a healthy bucket, and short enough that the fallback to the UTR
+     * happens while they are still looking at the page.
+     *
+     * `throwOnRequestTimeout` is the part that actually matters: without it the
+     * smithy handler only logs "a request has exceeded the configured requestTimeout"
+     * and keeps waiting, so the timeout reads as configured and does nothing.
+     */
+    requestHandler: new NodeHttpHandler({
+      requestTimeout: 10_000,
+      connectionTimeout: 5_000,
+      throwOnRequestTimeout: true,
+    }),
+    // One retry, not three: a store that is down stays down for longer than a
+    // customer will wait, and the fallback handles it properly.
+    maxAttempts: 2,
   });
   return cachedClient;
 }
@@ -135,7 +158,18 @@ export async function storePaymentScreenshot(file: File): Promise<{ key: string;
       );
     }
   } catch (err) {
-    log.error("screenshot_upload_failed", { err, driver: storageDriver(), size: bytes.byteLength });
+    /*
+     * Everything above this point is the customer's file being checked; this is
+     * the store itself refusing a file that passed. The distinction is the whole
+     * basis of the UTR fallback, so the two never share an error code: a bad file
+     * raises UPLOAD_INVALID and never reaches here.
+     */
+    log.error("screenshot_upload_failed", {
+      err,
+      driver: storageDriver(),
+      size: bytes.byteLength,
+      mime: sniffed,
+    });
     throw appError("UPLOAD_FAILED");
   }
 

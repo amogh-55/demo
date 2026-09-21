@@ -18,14 +18,14 @@ export async function POST(request: Request) {
   try {
     // Indian mobile networks put many subscribers behind one address, so this is
     // set well above what a person does and only catches automated abuse.
-    await rateLimit(`otp-send-ip:${clientIp(request.headers)}`, 20, 3600);
+    await rateLimit(`otp-send-ip:${clientIp(request.headers)}`, 20, 3600, { shared: true });
 
     if (!(await otpRequired())) {
       throw appError("VALIDATION", "Mobile verification is not switched on.");
     }
 
     const { phone } = otpSendSchema.parse(await readJson(request));
-    await rateLimit(`otp-send:${phone}`, 5, 3600);
+    await rateLimit(`otp-send:${phone}`, 5, 3600, { shared: true });
 
     const result = await sendOtp(phone);
     // `delivered: false` means no SMS provider is configured. Said plainly rather

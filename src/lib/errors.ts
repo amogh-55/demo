@@ -74,3 +74,20 @@ export class AppError extends Error {
 
 export const appError = (code: AppErrorCode, message?: string, details?: unknown) =>
   new AppError(code, message, details);
+
+/**
+ * Whether this is one of ours, with a code worth branching on.
+ *
+ * `instanceof` alone is not enough in a Next app: a module can be evaluated in
+ * more than one bundle, giving two AppError classes that are not each other's
+ * instances. The shape check is what makes the branch reliable.
+ */
+export function isAppError(err: unknown): err is AppError {
+  return (
+    err instanceof AppError ||
+    (typeof err === "object" &&
+      err !== null &&
+      (err as { name?: string }).name === "AppError" &&
+      typeof (err as { code?: unknown }).code === "string")
+  );
+}

@@ -130,21 +130,73 @@ export interface ResourceContext {
  * the resource id is what every slot unit is keyed on: if it resolves, the rest
  * of the chain is guaranteed to exist and to agree with it.
  */
+/**
+ * The ground, the service and the court behind one resource, briefly remembered.
+ *
+ * Every availability check, every hold and every submission needs these three
+ * documents, and they are among the least changeable things in the system — the
+ * owner edits a price a few times a year. Re-reading them on every request cost
+ * two round trips each: measured at a hundred people booking at once, that was
+ * several seconds per hold spent fetching rows that had not changed since the
+ * previous customer asked for them.
+ *
+ * Fifteen seconds is deliberately short. A price or an opening hour edited in the
+ * admin panel is live within that, deactivating a ground stops sales within that,
+ * and the window is smaller than the five-minute hold a customer already gets —
+ * so it introduces no staleness the booking flow did not already have.
+ */
+const CONTEXT_TTL_MS = 15_000;
+
+interface CachedContext {
+  resource: ResourceDoc;
+  facility: FacilityDoc;
+  location: LocationDoc;
+  expiresAt: number;
+}
+
+const contextCache = new Map<string, CachedContext>();
+
+/**
+ * Forget what was remembered about a resource, or about everything.
+ *
+ * Called by the admin routes that change any of it, so an owner watching their
+ * own edit does not have to wait out the TTL to see it. On a deployment with
+ * several instances only the one that took the write clears early; the rest
+ * expire on their own, which is what the short TTL is for.
+ */
+export function forgetResourceContext(resourceId?: ObjectId): void {
+  if (resourceId) contextCache.delete(resourceId.toHexString());
+  else contextCache.clear();
+}
+
 export async function loadResourceContext(
   db: Db,
   resourceId: ObjectId,
   requireActive: boolean,
 ): Promise<ResourceContext> {
-  const resource = await collections.resources(db).findOne({ _id: resourceId });
-  if (!resource) throw appError("NOT_FOUND", "We could not find that court or pitch.");
+  const key = resourceId.toHexString();
+  const now = Date.now();
+  let cached = contextCache.get(key);
 
-  const [facility, location] = await Promise.all([
-    collections.facilities(db).findOne({ _id: resource.facilityId }),
-    collections.locations(db).findOne({ _id: resource.locationId }),
-  ]);
-  if (!facility) throw appError("NOT_FOUND", "We could not find that facility.");
-  if (!location) throw appError("NOT_FOUND", "We could not find that location.");
+  if (!cached || cached.expiresAt <= now) {
+    const resource = await collections.resources(db).findOne({ _id: resourceId });
+    if (!resource) throw appError("NOT_FOUND", "We could not find that court or pitch.");
 
+    const [facility, location] = await Promise.all([
+      collections.facilities(db).findOne({ _id: resource.facilityId }),
+      collections.locations(db).findOne({ _id: resource.locationId }),
+    ]);
+    if (!facility) throw appError("NOT_FOUND", "We could not find that facility.");
+    if (!location) throw appError("NOT_FOUND", "We could not find that location.");
+
+    cached = { resource, facility, location, expiresAt: now + CONTEXT_TTL_MS };
+    contextCache.set(key, cached);
+  }
+
+  const { resource, facility, location } = cached;
+
+  // Checked on every call, cached or not: this is the switch that takes a ground
+  // off sale, and it must not be answered from a copy older than the check.
   if (requireActive && (!location.active || !facility.active || !resource.active)) {
     throw appError("LOCATION_INACTIVE");
   }
@@ -737,6 +789,15 @@ export interface SubmitBookingInput {
   verifiedPhone?: string | null;
   /** When true a booking is refused unless `verifiedPhone` matches the number given. */
   requirePhoneVerification?: boolean;
+  /**
+   * The storage provider genuinely refused a valid screenshot for this hold.
+   *
+   * Supplied by the route from a signed httpOnly cookie that only the upload
+   * route mints, and only after a real store failure. It is the single thing
+   * that lets an online booking through without an image, so it must never be
+   * derived from anything the client said.
+   */
+  storageFailed?: boolean;
   now?: Date;
 }
 
@@ -820,6 +881,24 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
     throw appError("VALIDATION", "Please enter the 12-digit UPI reference number (UTR) to finish booking.");
   }
 
+  /*
+   * The screenshot is required for anything paid online.
+   *
+   * The one exemption is an upload our own storage refused: losing a booking the
+   * customer has already paid for, because our provider had a bad minute, is a
+   * worse outcome than an owner checking one payment against the statement by
+   * hand. `storageFailed` is proof of exactly that, signed by this server — a
+   * client cannot assert it, and a file the customer chose badly never produces
+   * one, so the exemption cannot be reached by uploading rubbish on purpose.
+   */
+  const storageFailed = !bookedBy && !payAtVenue && Boolean(input.storageFailed);
+  if (!bookedBy && !payAtVenue && !input.paymentScreenshotKey && !storageFailed) {
+    throw appError(
+      "VALIDATION",
+      "Please upload a screenshot of your payment to finish booking.",
+    );
+  }
+
   // Same rule as the hold: the customer's booking window is a website rule, and
   // staff writing in a phone booking are not held to it. The date must still not
   // be in the past, which the hold already refused.
@@ -871,6 +950,11 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
             {
               id: crypto.randomUUID(),
               screenshotKey: input.paymentScreenshotKey,
+              // Recorded rather than inferred from a null key: "the provider was
+              // down" and "there was never an image" are the same absence and
+              // completely different problems for whoever checks this later.
+              uploadStatus: input.paymentScreenshotKey ? "UPLOADED" : storageFailed ? "FAILED" : "NONE",
+              uploadFailureReason: !input.paymentScreenshotKey && storageFailed ? "STORAGE_UNAVAILABLE" : null,
               utr,
               uploadedAt: now,
               amount: null,
@@ -1238,6 +1322,9 @@ export async function recordManualPayment(input: {
   const attempt: PaymentAttempt = {
     id: crypto.randomUUID(),
     screenshotKey: null,
+    // An admin typing in money they were handed. There was no image to upload.
+    uploadStatus: "NONE",
+    uploadFailureReason: null,
     utr: input.utr ?? null,
     uploadedAt: now,
     amount: input.amount,
@@ -1304,14 +1391,25 @@ export async function addPaymentAttempt(input: {
   bookingId: ObjectId;
   /** Null when the upload failed; the UTR below is what the payment is traced by. */
   screenshotKey: string | null;
+  /**
+   * The store refused a valid image for this attempt too. Proven server-side,
+   * exactly as on first submission — a retry is not a way round the requirement
+   * either.
+   */
+  storageFailed?: boolean;
   utr: string;
   now?: Date;
 }): Promise<BookingDoc> {
   const db = await getDb();
   const now = input.now ?? new Date();
+  if (!input.screenshotKey && !input.storageFailed) {
+    throw appError("VALIDATION", "Please upload a screenshot of your payment.");
+  }
   const attempt: PaymentAttempt = {
     id: crypto.randomUUID(),
     screenshotKey: input.screenshotKey,
+    uploadStatus: input.screenshotKey ? "UPLOADED" : "FAILED",
+    uploadFailureReason: input.screenshotKey ? null : "STORAGE_UNAVAILABLE",
     utr: input.utr,
     uploadedAt: now,
     amount: null,

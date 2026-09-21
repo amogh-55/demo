@@ -127,6 +127,11 @@ export async function getPublicCatalog(): Promise<PublicLocationTree[]> {
 
 /** The widest booking window on offer, for the date picker's upper bound. */
 export function widestBookingWindow(catalog: PublicLocationTree[], fallback: number): number {
-  const windows = catalog.flatMap((l) => l.facilities.map((f) => f.bookingWindowDays));
+  // Filtered, not trusted: one facility whose config predates this field makes
+  // Math.max return NaN, and a NaN booking window travels all the way to the
+  // customer's date picker before anything notices.
+  const windows = catalog
+    .flatMap((l) => l.facilities.map((f) => f.bookingWindowDays))
+    .filter((n): n is number => Number.isFinite(n) && n >= 0);
   return windows.length > 0 ? Math.max(...windows) : fallback;
 }

@@ -289,6 +289,35 @@ describe("WhatsApp links", () => {
     assert.ok(message.includes("Sat, 10 Oct 2026"));
   });
 
+  /**
+   * A booking taken over the phone is confirmed on an advance, so the message
+   * has to carry all three numbers. Saying only the total is how somebody turns
+   * up believing they have paid.
+   */
+  it("spells out the balance when only an advance was taken", () => {
+    const message = confirmationMessage({ ...booking, paid: 200 });
+    assert.ok(message.includes("Total: ₹1,600"), message);
+    assert.ok(message.includes("Advance received: ₹200"), message);
+    assert.ok(message.includes("To pay at the ground: ₹1,400"), message);
+    assert.ok(message.includes("bring the balance"), message);
+  });
+
+  it("asks for the whole amount when nothing has been paid", () => {
+    const message = confirmationMessage({ ...booking, paid: 0 });
+    assert.ok(message.includes("Total: ₹1,600"), message);
+    assert.ok(!message.includes("Advance received"), "there was no advance to name");
+    assert.ok(message.includes("To pay at the ground: ₹1,600"), message);
+  });
+
+  it("says nothing about a balance when the booking is paid in full", () => {
+    for (const paid of [1600, 2000, undefined]) {
+      const message = confirmationMessage({ ...booking, paid });
+      assert.ok(message.includes("Amount paid: ₹1,600"), message);
+      assert.ok(!message.includes("To pay at the ground"), `paid ${String(paid)}: ${message}`);
+      assert.ok(!message.includes("bring the balance"), message);
+    }
+  });
+
   it("states the reason in the rejection message", () => {
     const message = rejectionMessage({ ...booking, reason: "Payment not received" });
     assert.ok(message.includes("could not be confirmed"));
@@ -411,6 +440,80 @@ describe("weekend price bands", () => {
       weekendPriceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: -100 }],
     });
     assert.equal(result.success, false);
+  });
+});
+
+describe("every open hour must carry a price", () => {
+  const base = {
+    slotMinutes: 60,
+    openMin: 6 * 60,
+    closeMin: 22 * 60,
+    bookingWindowDays: 30,
+    holdMinutes: 5,
+  };
+
+  /**
+   * The bug this guards: widening the hours without widening the bands does not
+   * fail anywhere downstream — `buildDayTemplate` simply skips unpriced starts —
+   * so the ground silently stops selling the hours it just opened.
+   */
+  it("refuses hours the price bands do not reach", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      openMin: 0,
+      priceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: 700 }],
+    });
+    assert.equal(result.success, false, "midnight to 6 AM is unpriced");
+  });
+
+  it("refuses a hole in the middle of the day", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      priceRules: [
+        { fromMin: 6 * 60, toMin: 12 * 60, price: 700 },
+        { fromMin: 17 * 60, toMin: 22 * 60, price: 900 },
+      ],
+    });
+    assert.equal(result.success, false, "noon to 5 PM is unpriced");
+  });
+
+  it("accepts bands that cover the window exactly", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      priceRules: [
+        { fromMin: 6 * 60, toMin: 17 * 60, price: 700 },
+        { fromMin: 17 * 60, toMin: 22 * 60, price: 900 },
+      ],
+    });
+    assert.equal(result.success, true, result.success ? "" : JSON.stringify(result.error.issues));
+  });
+
+  it("accepts a band wider than the opening hours", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      priceRules: [{ fromMin: 0, toMin: 24 * 60, price: 700 }],
+    });
+    assert.equal(result.success, true);
+  });
+
+  it("applies the same rule to the weekend table", () => {
+    const result = facilityConfigSchema.safeParse({
+      ...base,
+      priceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price: 700 }],
+      weekendPriceRules: [{ fromMin: 6 * 60, toMin: 20 * 60, price: 900 }],
+    });
+    assert.equal(result.success, false, "8 PM to 10 PM has no weekend price");
+  });
+
+  /** A price that never arrived. JSON has no NaN, so an empty box reaches here as null. */
+  it("refuses a band with no price at all", () => {
+    for (const price of [null, undefined, "", Number.NaN]) {
+      const result = facilityConfigSchema.safeParse({
+        ...base,
+        priceRules: [{ fromMin: 6 * 60, toMin: 22 * 60, price }],
+      });
+      assert.equal(result.success, false, `price ${String(price)} should be refused`);
+    }
   });
 });
 

@@ -85,7 +85,18 @@ export async function GET(request: Request) {
       },
       resource: { id: resource._id.toHexString(), name: resource.name, active: resource.active },
       date,
-      config: { openMin: config.openMin, closeMin: config.closeMin, slotMinutes: config.slotMinutes },
+      config: {
+        openMin: config.openMin,
+        closeMin: config.closeMin,
+        slotMinutes: config.slotMinutes,
+        /**
+         * An OVERS facility prices every unit at 0 — the ball carries the money —
+         * so the grid has to be told what a block actually costs, or it shows the
+         * owner a wall of "₹0" for a machine they charge ₹100 to use.
+         */
+        oversPerSlot: config.oversPerSlot,
+        ballTypes: config.ballTypes,
+      },
       dayBlock: dayBlock ? { reason: dayBlock.reason, blockedBy: dayBlock.blockedBy } : null,
       units,
     });

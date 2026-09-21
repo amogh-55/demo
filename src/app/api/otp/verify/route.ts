@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    await rateLimit(`otp-verify-ip:${clientIp(request.headers)}`, 40, 3600);
+    await rateLimit(`otp-verify-ip:${clientIp(request.headers)}`, 40, 3600, { shared: true });
 
     if (!(await otpRequired())) {
       throw appError("VALIDATION", "Mobile verification is not switched on.");

@@ -18,23 +18,38 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
   const [scrolled, setScrolled] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   /**
-   * The hero has its own Book button a few centimetres below this one, and two
-   * of them stacked reads as a mistake. So the header's CTA only appears once
-   * the hero has scrolled away and the page no longer offers one.
+   * The header's Book button sends people to the grounds, so it is pointless
+   * while the grounds are on screen — and it was appearing right in the middle
+   * of them, offering to take the reader somewhere they were already standing.
+   *
+   * It therefore waits until that section has scrolled up past the header, which
+   * is the first moment the offer is worth anything again. On a page with no
+   * grounds section — the booking page, a receipt — it falls back to the hero
+   * rule, so the button still turns up.
    */
-  const [pastHero, setPastHero] = React.useState(false);
+  const [pastGrounds, setPastGrounds] = React.useState(false);
 
   React.useEffect(() => {
     const onScroll = () => {
       setScrolled(window.scrollY > 24);
+
+      const grounds = document.getElementById("grounds");
+      if (grounds) {
+        // Its bottom edge above the header's own height: the section is gone.
+        setPastGrounds(grounds.getBoundingClientRect().bottom < 64);
+        return;
+      }
       // Measured against the viewport rather than a fixed pixel count, so it
-      // behaves the same on a phone as on a desktop — and on pages with no hero
-      // at all the first scroll brings the button straight in.
-      setPastHero(window.scrollY > window.innerHeight * 0.6);
+      // behaves the same on a phone as on a desktop.
+      setPastGrounds(window.scrollY > window.innerHeight * 0.6);
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    window.addEventListener("resize", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
   }, []);
 
   return (
@@ -77,7 +92,15 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
           ) : null}
           {/* Kept in the layout while hidden, so the header does not jolt sideways
               the moment it appears. */}
-          <Link href="/book" className={cn("transition-opacity duration-300", pastHero ? "opacity-100" : "pointer-events-none opacity-0")} aria-hidden={!pastHero} tabIndex={pastHero ? undefined : -1}>
+          {/* Same destination as the hero's: the grounds, so a ground is chosen
+              before a time is. On any page without a #grounds section the anchor
+              simply takes them home to it. */}
+          <Link
+            href="/#grounds"
+            className={cn("transition-opacity duration-300", pastGrounds ? "opacity-100" : "pointer-events-none opacity-0")}
+            aria-hidden={!pastGrounds}
+            tabIndex={pastGrounds ? undefined : -1}
+          >
             <Button>Book now</Button>
           </Link>
           <button

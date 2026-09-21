@@ -19,6 +19,13 @@ export interface PaymentAttemptView {
   hasScreenshot?: boolean;
   /** The image was deleted by the retention job; the payment record itself remains. */
   screenshotExpired?: boolean;
+  /**
+   * What became of the image on this attempt. FAILED means the customer sent a
+   * valid one and our storage refused it — a different thing entirely from an
+   * attempt that never had a screenshot behind it.
+   */
+  uploadStatus?: "UPLOADED" | "FAILED" | "NONE";
+  uploadFailureReason?: "STORAGE_UNAVAILABLE" | null;
 }
 
 export interface PaymentReviewBooking {
@@ -28,6 +35,8 @@ export interface PaymentReviewBooking {
   amount: number;
   amountPaid: number;
   amountRemaining: number;
+  /** A booking taken over the phone is already CONFIRMED and still owes its money. */
+  status: string;
   payments: PaymentAttemptView[];
 }
 
@@ -94,6 +103,8 @@ export function PaymentReviewDialog({
    * accepted, so the flag is false and the button stays a plain "Record payment".
    */
   const settlesInFull = mode === "ACCEPT" && amountValid && projectedRemaining <= 0;
+  /** Already accepted — a phone booking, or a session paid for at the gate. */
+  const alreadyConfirmed = booking.status === "CONFIRMED";
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => (busy ? null : onOpenChange(next))}>
@@ -101,7 +112,9 @@ export function PaymentReviewDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-ink-950/50 backdrop-blur-sm" />
         {/* dvh, not vh: with the keyboard up, vh still measures the un-shrunk phone viewport. */}
         <Dialog.Content className="theme-light fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl bg-white p-5 shadow-xl focus:outline-none">
-          <Dialog.Title className="text-lg font-semibold text-ink-900">Review payment</Dialog.Title>
+          <Dialog.Title className="text-lg font-semibold text-ink-900">
+            {alreadyConfirmed ? "Record a payment" : "Review payment"}
+          </Dialog.Title>
           <Dialog.Description className="mt-1 break-words text-sm text-ink-600">
             {booking.reference} · {booking.customerName}
           </Dialog.Description>
@@ -138,9 +151,13 @@ export function PaymentReviewDialog({
                       <span className="ml-1.5 shrink-0 text-ink-400">
                         {p.screenshotExpired
                           ? "· image deleted after 7 days"
-                          : p.utr
-                            ? `· UTR ${p.utr}`
-                            : "· recorded by staff"}
+                          : p.uploadStatus === "FAILED"
+                            ? // Our storage, not the customer: the distinction decides
+                              // whether the owner chases them or the bank statement.
+                              `· upload failed, UTR ${p.utr ?? "not given"}`
+                            : p.utr
+                              ? `· UTR ${p.utr}`
+                              : "· recorded by staff"}
                       </span>
                     </span>
                   ) : (
@@ -303,13 +320,23 @@ export function PaymentReviewDialog({
                     <Alert tone={projectedRemaining > 0 ? "warning" : "success"} className="mt-3">
                       {projectedRemaining > 0 ? (
                         <>
-                          Still short by <strong>{formatCurrency(projectedRemaining)}</strong>. The booking stays pending
-                          and <strong>keeps its slots</strong> — you can ask for the balance on WhatsApp.
+                          Still short by <strong>{formatCurrency(projectedRemaining)}</strong>. The booking{" "}
+                          <strong>keeps its slots</strong> either way — you can ask for the balance on WhatsApp.
                         </>
                       ) : (
                         <>
                           Paid in full{projectedRemaining < 0 ? ` (${formatCurrency(-projectedRemaining)} over)` : ""}.
-                          Recording it <strong>accepts the booking</strong> in the same step.
+                          {alreadyConfirmed ? (
+                            <>
+                              {" "}
+                              The booking is already confirmed — this just settles the money.
+                            </>
+                          ) : (
+                            <>
+                              {" "}
+                              Recording it <strong>accepts the booking</strong> in the same step.
+                            </>
+                          )}
                         </>
                       )}
                     </Alert>

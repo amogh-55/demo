@@ -105,12 +105,16 @@ export default async function HomePage() {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 animate-fade-up sm:flex-row">
-              <Link href="/book">
+              {/* Down to the grounds, not straight to the booking form. Three
+                  grounds sell different things, and a customer who lands on the
+                  form first has to pick one from a dropdown having never seen
+                  what is at any of them. */}
+              <a href="#grounds">
                 <Button size="lg" className="w-full sm:w-auto">
                   <CalendarDays className="h-5 w-5" aria-hidden="true" />
-                 Book Now
+                  Book Now
                 </Button>
-              </Link>
+              </a>
               {/* The photos are the thing that actually sells a ground, and they
                   are already on this page — so this sends people to them rather
                   than out to WhatsApp. */}

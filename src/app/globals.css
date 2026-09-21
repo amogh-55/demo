@@ -64,6 +64,16 @@
       disabled:cursor-not-allowed disabled:opacity-60;
   }
 
+  /* A field the form will not accept. Driven off aria-invalid so the outline and
+     the screen-reader state can never disagree — one attribute sets both. */
+  .field-input[aria-invalid="true"] {
+    @apply border-red-500 ring-2 ring-red-500/30 focus:border-red-500 focus:ring-red-500/40;
+  }
+
+  .field-error {
+    @apply mt-1.5 flex items-start gap-1.5 text-xs font-medium text-red-300 theme-light:text-red-700;
+  }
+
   .card {
     /* 20px of padding either side costs an eighth of a 320px screen, so phones
        get a tighter box and the roomier one starts at the small breakpoint. */
@@ -78,6 +88,10 @@
   .theme-light .field-input {
     @apply border-ink-200 bg-white text-ink-900 placeholder:text-ink-400
       focus:border-pitch-500 focus:ring-pitch-500/30 disabled:bg-ink-50;
+  }
+
+  .theme-light .field-input[aria-invalid="true"] {
+    @apply border-red-500 bg-red-50/40 ring-2 ring-red-500/25;
   }
 
   .theme-light .card {

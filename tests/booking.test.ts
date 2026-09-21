@@ -1116,6 +1116,10 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         { _id: FACILITY_ID },
         { $set: { "config.priceRules": [{ fromMin: 0, toMin: 1440, price: 5000 }] } },
       );
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
 
       const stored = await collections.bookings(db).findOne({ _id: booking._id });
       assert.equal(stored!.amount, 1600, "historic bookings must not be repriced");
@@ -1125,6 +1129,10 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         { _id: FACILITY_ID },
         { $set: { "config.priceRules": SCHEDULE.priceRules } },
       );
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
     });
 
     it("returns the same booking when the same hold is submitted twice", async () => {
@@ -1993,27 +2001,79 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.ok(units.every((u) => u.status === "HELD"));
     });
 
-    it("books on the reference alone when the screenshot never uploaded", async () => {
+    /**
+     * A screenshot is required. Sending none is the customer not having done
+     * their part, and no amount of UTR makes up for it — otherwise nobody would
+     * ever send one.
+     */
+    it("refuses a booking with no screenshot", async () => {
       const date = futureDate(22);
       const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: null,
+            utr: UTR,
+          }),
+        /screenshot/i,
+      );
+
+      // The slot is still theirs: they can upload and finish.
+      const units = await collections.slotUnits(db).find({ date }).toArray();
+      assert.ok(units.every((u) => u.status === "HELD"), "a refused submission must not release the slot");
+    });
+
+    /**
+     * The one exemption, and the reason the whole mechanism exists: the customer
+     * has paid, the image was fine, and our storage would not take it. Refusing
+     * the booking here would charge them for our outage.
+     *
+     * `storageFailed` reaches this function from a cookie the server signed after
+     * a real store failure — never from anything the browser said.
+     */
+    it("books on the reference alone when OUR storage refused the image", async () => {
+      const date = futureDate(22);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1140, endMin: 1200 });
       const booking = await service.submitBooking({
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
         paymentScreenshotKey: null,
         utr: UTR,
+        storageFailed: true,
       });
 
       assert.equal(booking.status, "PENDING");
+      assert.equal(booking.paymentVerificationStatus, "PENDING", "nothing is verified automatically");
       assert.equal(booking.paymentScreenshotKey, null);
       assert.equal(booking.payments.length, 1, "the payment is recorded even with no image");
       assert.equal(booking.payments[0]!.utr, UTR);
       assert.equal(booking.payments[0]!.screenshotKey, null);
+      // The distinction the admin screen reads: our fault, not a missing payment.
+      assert.equal(booking.payments[0]!.uploadStatus, "FAILED");
+      assert.equal(booking.payments[0]!.uploadFailureReason, "STORAGE_UNAVAILABLE");
       assert.ok(booking.timeline.some((t) => t.event === "PAYMENT_UTR_ENTERED"));
 
       // The admin can still accept it: the money is traced by the reference.
       const accepted = await acceptPayment(booking);
       assert.equal(accepted.paymentVerificationStatus, "VERIFIED");
+    });
+
+    it("records a successful upload as such", async () => {
+      const date = futureDate(22);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1200, endMin: 1260 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      assert.equal(booking.payments[0]!.uploadStatus, "UPLOADED");
+      assert.equal(booking.payments[0]!.uploadFailureReason, null);
     });
 
     it("keeps the reference on a balance payment too", async () => {
@@ -2028,15 +2088,56 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       });
       await acceptPayment(booking, 800);
 
+      // A balance payment needs its own screenshot, on the same terms.
+      await assert.rejects(
+        () =>
+          service.addPaymentAttempt({
+            bookingId: booking._id,
+            screenshotKey: null,
+            utr: "210987654321",
+          }),
+        /screenshot/i,
+      );
+
       const topped = await service.addPaymentAttempt({
         bookingId: booking._id,
         screenshotKey: null,
         utr: "210987654321",
+        storageFailed: true,
       });
       assert.equal(topped.payments.length, 2);
       assert.equal(topped.payments[1]!.utr, "210987654321");
+      assert.equal(topped.payments[1]!.uploadStatus, "FAILED");
       // The first screenshot is still the one on file — a failed upload did not erase it.
       assert.equal(topped.paymentScreenshotKey, SCREENSHOT);
+    });
+
+    /**
+     * Retry, once the store is back. The whole point of item 6: our outage must
+     * not cost the customer their booking, so the image can arrive later and
+     * land on the booking they already have.
+     */
+    it("accepts the screenshot later, on the booking that already exists", async () => {
+      const date = futureDate(25);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1020, endMin: 1080 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        utr: UTR,
+        storageFailed: true,
+      });
+      assert.equal(booking.paymentScreenshotKey, null);
+
+      const retried = await service.addPaymentAttempt({
+        bookingId: booking._id,
+        screenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      assert.equal(retried.reference, booking.reference, "the same booking, not a new one");
+      assert.equal(retried.paymentScreenshotKey, SCREENSHOT, "the image is now on file");
+      assert.equal(retried.payments.at(-1)!.uploadStatus, "UPLOADED");
     });
 
     it("asks for nothing when the session is paid for at the ground", async () => {
@@ -2321,10 +2422,18 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     beforeEach(async () => {
       await collections.facilities(db).updateOne({ _id: FACILITY_ID }, { $set: { config: WEEKEND_CONFIG } });
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
     });
 
     after(async () => {
       await collections.facilities(db).updateOne({ _id: FACILITY_ID }, { $set: { config: SCHEDULE } });
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
     });
 
     it("quotes weekend prices on a Saturday and weekday prices on a Tuesday", async () => {
@@ -2367,6 +2476,10 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         { _id: FACILITY_ID },
         { $set: { "config.weekendDays": [6] } }, // Saturday only
       );
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
       const friday = await service.getAvailability(RESOURCE_ID, nextDateOn(5, 2));
       assert.equal(friday.units.find((u) => u.startMin === 1020)!.price, 800);
       const saturday = await service.getAvailability(RESOURCE_ID, nextDateOn(6, 2));
@@ -2378,6 +2491,10 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         { _id: FACILITY_ID },
         { $set: { "config.weekendPriceRules": [] } },
       );
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
       const saturday = await service.getAvailability(RESOURCE_ID, nextDateOn(6, 2));
       assert.equal(saturday.units.find((u) => u.startMin === 1020)!.price, 800);
       assert.equal(saturday.weekendRate, false);
@@ -2393,6 +2510,10 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         { _id: FACILITY_ID },
         { $set: { "config.weekendPriceRules.0.price": 9999 } },
       );
+      // Written straight to the database, so the running service still holds the
+      // configuration it last read. Real edits go through the admin route, which
+      // clears this itself.
+      service.forgetResourceContext();
 
       // The schedule is re-read at submission, so the new price is what applies —
       // and the customer is told rather than quietly charged the old one.

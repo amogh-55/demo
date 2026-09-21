@@ -35,6 +35,8 @@ interface AdminBooking {
   amountPaid: number;
   amountRemaining: number;
   payments: PaymentAttemptView[];
+  /** UPLOADED, FAILED (our storage refused a valid image) or NONE. */
+  screenshotUploadStatus: "UPLOADED" | "FAILED" | "NONE";
   hasScreenshot: boolean;
   rejectionReason: string | null;
   createdAt: string;
@@ -61,6 +63,7 @@ export function BookingsManager({
   facilities,
   today,
   initialFilters,
+  initialList,
 }: {
   locations: Array<{ id: string; name: string }>;
   /** Everything bookable, for the phone-booking dialog. */
@@ -68,6 +71,8 @@ export function BookingsManager({
   /** Today in Asia/Kolkata, from the server — never the admin's device clock. */
   today: string;
   initialFilters: { locationId?: string; date?: string; status?: string; payment?: string; search?: string };
+  /** Page one for these filters, already queried on the server. */
+  initialList: ListResponse;
 }) {
   const [locationId, setLocationId] = React.useState(initialFilters.locationId ?? "");
   const [date, setDate] = React.useState(initialFilters.date ?? "");
@@ -77,8 +82,8 @@ export function BookingsManager({
   const [page, setPage] = React.useState(1);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
 
-  const [data, setData] = React.useState<ListResponse | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const [data, setData] = React.useState<ListResponse | null>(initialList);
+  const [loading, setLoading] = React.useState(false);
   const [listError, setListError] = React.useState<string | null>(null);
 
   const [pending, setPending] = React.useState<PendingAction | null>(null);
@@ -105,7 +110,18 @@ export function BookingsManager({
     }
   }, [locationId, date, status, payment, search, page]);
 
+  /**
+   * The list the server already rendered is the list for the filters the page
+   * was opened with, so the first run of this effect has nothing to fetch. It
+   * takes over from the first filter change onwards.
+   */
+  const serverRendered = React.useRef(true);
+
   React.useEffect(() => {
+    if (serverRendered.current) {
+      serverRendered.current = false;
+      return;
+    }
     const id = window.setTimeout(() => void load(), search ? 300 : 0);
     return () => window.clearTimeout(id);
   }, [load, search]);
@@ -489,7 +505,24 @@ function BookingCard({
   const latestUtr = [...booking.payments].reverse().find((p) => p.utr)?.utr ?? null;
   // Confirming needs the money to actually add up, not just a verified flag.
   const paidInFull = booking.paymentVerificationStatus === "VERIFIED" && booking.amountRemaining <= 0;
-  const partPaid = isPending && booking.amountRemaining > 0 && booking.amountPaid > 0;
+  const owes = booking.amountRemaining > 0;
+
+  /**
+   * Whether the server would accept a payment against this booking — the same
+   * three cases `recordManualPayment` allows, said in the same order.
+   *
+   * A booking taken over the phone is CONFIRMED from the moment it is made and
+   * still owes its money, so without this the owner who collects the balance at
+   * the gate has nowhere at all to record it, and the booking reads PARTIAL for
+   * ever.
+   */
+  const takesPayment =
+    owes && (isPending || (booking.status === "CONFIRMED" && (booking.payAtVenue || Boolean(booking.createdBy))));
+
+  /** What the customer actually turns up to use. */
+  const service = [booking.facilityName, booking.resourceName !== booking.facilityName ? booking.resourceName : null]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <li className={cn("card relative overflow-hidden pl-5 sm:pl-6", busy && "opacity-70")}>
@@ -498,21 +531,11 @@ function BookingCard({
         className={cn("absolute inset-y-0 left-0 w-1.5", STATUS_ACCENT[booking.status] ?? "bg-ink-300")}
       />
 
-      {/* Stacked on a phone. Side by side, the two status pills needed most of the
-          row and squeezed the name column to nothing, which wrapped it to one
-          letter per line. */}
+      {/* 1. Who, and where the booking stands. */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-x-4">
-        <div className="min-w-0 sm:flex-1">
-          <p className="break-words text-lg font-semibold leading-tight text-ink-900">{booking.customerName}</p>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-ink-500">
-            <a href={`tel:+91${booking.customerPhone}`} className="font-medium text-ink-700 hover:text-pitch-700">
-              +91 {booking.customerPhone}
-            </a>
-            <span aria-hidden="true">·</span>
-            {/* Short and meaningless if broken across lines, so it never wraps. */}
-            <span className="whitespace-nowrap font-mono text-xs tracking-wide">{booking.reference}</span>
-          </p>
-        </div>
+        <p className="min-w-0 break-words text-lg font-semibold leading-tight text-ink-900 sm:flex-1">
+          {booking.customerName}
+        </p>
 
         {/* Two statuses that can both read "Pending" are meaningless side by side,
             so each one says what it is about. */}
@@ -532,53 +555,70 @@ function BookingCard({
         </dl>
       </div>
 
-      {/* The slot and the money are what the owner is deciding on, so they sit in
-          their own band rather than as two more lines of running text. */}
+      {/* 2. What they booked, at the size it is actually asked about on the phone.
+          It used to be the smallest text on the card, under the money. */}
+      <p className="mt-1.5 break-words text-[15px] font-semibold text-pitch-800">
+        {service || booking.locationName}
+        {service ? <span className="font-normal text-ink-500"> · {booking.locationName}</span> : null}
+      </p>
+
+      {/* 3. When, and how much — the two things a decision is made on. */}
       <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-lg bg-ink-50 px-3 py-2.5">
         <div className="min-w-0">
           <p className="text-[15px] font-semibold leading-tight text-ink-900">
+            {formatBusinessDate(booking.date)}
+          </p>
+          <p className="mt-0.5 text-sm text-ink-700">
             {formatRange(booking.startMin, booking.endMin)}
-            <span className="ml-1.5 text-xs font-normal text-ink-500">
+            <span className="ml-1.5 text-xs text-ink-500">
               ({booking.overs !== null
                 ? `${booking.overs} overs${booking.ballTypeName ? `, ${booking.ballTypeName}` : ""}`
                 : minutesToDuration(booking.endMin - booking.startMin)})
             </span>
           </p>
-          {/* Which facility and which court, not just which ground: at a ground
-              selling three different things the ground name alone does not say
-              what the customer turns up to use. */}
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-ink-600">
-            <span className="font-medium">{formatBusinessDate(booking.date)}</span>
-            <span className="text-ink-300" aria-hidden="true">·</span>
-            <span className="min-w-0 break-words">
-              {[booking.facilityName, booking.resourceName !== booking.facilityName ? booking.resourceName : null]
-                .filter(Boolean)
-                .join(" · ") || booking.locationName}
-            </span>
-            <span className="text-ink-300" aria-hidden="true">·</span>
-            <span className="min-w-0 break-words">{booking.locationName}</span>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="text-lg font-bold leading-none text-ink-900">{formatCurrency(booking.amount)}</p>
+          <p className="mt-1 text-xs font-semibold">
+            {booking.amountPaid > 0 ? (
+              <span className={paidInFull ? "text-green-700" : "text-amber-700"}>
+                {formatCurrency(booking.amountPaid)} received
+                {owes ? <span className="text-ink-500"> · {formatCurrency(booking.amountRemaining)} due</span> : null}
+              </span>
+            ) : booking.payAtVenue || booking.createdBy ? (
+              // Not a payment to chase: this one was always going to be paid at the gate.
+              <span className="text-amber-700">collect at the ground</span>
+            ) : (
+              <span className="font-normal text-ink-500">nothing received</span>
+            )}
           </p>
         </div>
-        <p className="flex shrink-0 flex-wrap items-baseline gap-x-2 text-sm">
-          <span className="text-lg font-bold leading-none text-ink-900">{formatCurrency(booking.amount)}</span>
-          {booking.amountPaid > 0 ? (
-            <span className={cn("text-xs font-semibold", paidInFull ? "text-green-700" : "text-amber-700")}>
-              {formatCurrency(booking.amountPaid)} received
-            </span>
-          ) : booking.payAtVenue || booking.createdBy ? (
-            // Not a payment to chase: this one was always going to be paid at the gate.
-            <span className="text-xs font-semibold text-amber-700">collect at the ground</span>
-          ) : (
-            <span className="text-xs text-ink-500">nothing received</span>
-          )}
-        </p>
       </div>
+
+      {/* 4. How to reach them, and what to search for. Quiet: needed when acting
+          on the booking, not when scanning the list. */}
+      <p className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-ink-500">
+        <a href={`tel:+91${booking.customerPhone}`} className="font-medium text-ink-700 hover:text-pitch-700">
+          +91 {booking.customerPhone}
+        </a>
+        <span aria-hidden="true">·</span>
+        {/* Short and meaningless if broken across lines, so it never wraps. */}
+        <span className="whitespace-nowrap font-mono text-xs tracking-wide">{booking.reference}</span>
+        {booking.createdBy ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="text-xs">
+              by phone, taken by <span className="font-medium text-ink-700">{booking.createdBy}</span>
+            </span>
+          </>
+        ) : null}
+      </p>
 
       {/* The UTR, spelled out on the card: it is the first thing the owner looks
           for when matching a booking to a line in the bank statement, and asking
           them to open a dialog for it would mean opening one per booking. */}
       {latestUtr ? (
-        <p className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
+        <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-sm">
           <span className="text-ink-500">UTR</span>
           <span className="select-all font-mono font-semibold tracking-wide text-ink-800">{latestUtr}</span>
           {!booking.hasScreenshot ? (
@@ -587,16 +627,46 @@ function BookingCard({
         </p>
       ) : null}
 
-      {booking.createdBy ? (
-        <p className="mt-2 text-sm text-ink-600">
-          Taken over the phone by <span className="font-medium text-ink-800">{booking.createdBy}</span>.
+      {takesPayment && booking.amountPaid > 0 ? (
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+          Short by {formatCurrency(booking.amountRemaining)}
+          {isPending ? " — the slots are still reserved for this customer." : "."}
         </p>
       ) : null}
 
-      {partPaid ? (
-        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
-          Short by {formatCurrency(booking.amountRemaining)} — the slots are still reserved for this customer.
-        </p>
+      {/*
+        The customer paid and sent an image; our storage would not take it. Said
+        loudly, because the usual "no screenshot" signal here means the customer
+        did not send one, and this is the opposite situation.
+      */}
+      {booking.screenshotUploadStatus === "FAILED" ? (
+        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+          <p className="font-semibold">⚠️ Payment screenshot unavailable — verify using the UTR or bank statement.</p>
+          <p className="mt-1">
+            The customer sent a valid screenshot and our storage could not accept it. Nothing here has been
+            verified automatically.
+          </p>
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+            <div>
+              <dt className="text-amber-800">Expected</dt>
+              <dd className="font-semibold">{formatCurrency(booking.amount)}</dd>
+            </div>
+            <div>
+              <dt className="text-amber-800">Received</dt>
+              <dd className="font-semibold">
+                {booking.amountPaid > 0 ? formatCurrency(booking.amountPaid) : "not yet"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-amber-800">UTR</dt>
+              <dd className="select-all font-mono font-semibold">{latestUtr ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-amber-800">Payment</dt>
+              <dd className="font-semibold">{booking.paymentVerificationStatus.toLowerCase()}</dd>
+            </div>
+          </dl>
+        </div>
       ) : null}
 
       {booking.rejectionReason ? (
@@ -608,9 +678,11 @@ function BookingCard({
       {/* Stacked below sm: six short buttons wrapping on a phone read as a jumble, and
           36px-tall pills are hard to hit for an owner working one-handed. */}
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        {isPending && !paidInFull ? (
+        {takesPayment ? (
           <Button size="sm" className="h-11 sm:h-9" onClick={onReview} disabled={busy}>
-            Review payment
+            {/* A confirmed phone booking is not "under review" — the owner is
+                writing down cash they have already taken. */}
+            {isPending ? "Review payment" : `Record ${formatCurrency(booking.amountRemaining)} received`}
           </Button>
         ) : null}
 
@@ -620,7 +692,7 @@ function BookingCard({
           </Button>
         ) : null}
 
-        {partPaid ? (
+        {takesPayment && booking.amountPaid > 0 ? (
           <Button size="sm" variant="whatsapp" className="h-11 sm:h-9" onClick={() => onWhatsapp("BALANCE")} disabled={busy}>
             Ask for {formatCurrency(booking.amountRemaining)}
           </Button>
@@ -646,11 +718,7 @@ function BookingCard({
               <ExternalLink className="h-3 w-3" aria-hidden="true" />
             </Button>
           </a>
-        ) : booking.createdBy ? null : (
-          <span className="self-center text-sm text-ink-500">
-            {latestUtr ? "No screenshot — the UTR above is the payment" : "No screenshot uploaded"}
-          </span>
-        )}
+        ) : null}
 
         {/* Releasing someone's slots is irreversible, so it is pushed to the end and
             styled quietly. A solid red button was the loudest thing on the card and

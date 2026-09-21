@@ -26,7 +26,33 @@ export interface BookingMessageInput {
   supportPhone?: string;
 }
 
-export function confirmationMessage(b: BookingMessageInput): string {
+/** "₹1,200", in the grouping an Indian customer reads. */
+const rupees = (amount: number) => `₹${amount.toLocaleString("en-IN")}`;
+
+export function confirmationMessage(
+  b: BookingMessageInput & {
+    /** What has actually been received so far. Defaults to the full amount. */
+    paid?: number;
+  },
+): string {
+  const received = Number.isFinite(b.paid as number) ? (b.paid as number) : b.amount;
+  const remaining = Math.max(0, b.amount - received);
+
+  /*
+   * A booking taken over the telephone is confirmed with only the advance in
+   * hand, so "Amount: ₹800" on its own is the wrong number twice over: it is
+   * neither what they paid nor what they owe. Saying all three means nobody
+   * turns up at the gate arguing about the balance.
+   */
+  const amountLines =
+    remaining > 0
+      ? [
+          `Total: ${rupees(b.amount)}`,
+          ...(received > 0 ? [`Advance received: ${rupees(received)}`] : []),
+          `*To pay at the ground: ${rupees(remaining)}*`,
+        ]
+      : [`Amount paid: ${rupees(b.amount)}`];
+
   return [
     `Hi ${b.customerName}, your cricket turf booking is confirmed. ✅`,
     ``,
@@ -35,8 +61,9 @@ export function confirmationMessage(b: BookingMessageInput): string {
     ...(b.locationAddress ? [`Address: ${b.locationAddress}`] : []),
     `Date: ${formatBusinessDate(b.date)}`,
     `Time: ${formatRange(b.startMin, b.endMin)}`,
-    `Amount: ₹${b.amount.toLocaleString("en-IN")}`,
+    ...amountLines,
     ``,
+    ...(remaining > 0 ? [`Please bring the balance with you.`] : []),
     `Please arrive 10 minutes early. See you at ${b.businessName}!`,
   ].join("\n");
 }
@@ -53,9 +80,9 @@ export function balanceRequestMessage(b: BookingMessageInput & { paid: number; r
     `Date: ${formatBusinessDate(b.date)}`,
     `Time: ${formatRange(b.startMin, b.endMin)}`,
     ``,
-    `Total: ₹${b.amount.toLocaleString("en-IN")}`,
-    `Received: ₹${b.paid.toLocaleString("en-IN")}`,
-    `*Balance due: ₹${b.remaining.toLocaleString("en-IN")}*`,
+    `Total: ${rupees(b.amount)}`,
+    `Received: ${rupees(b.paid)}`,
+    `*Balance due: ${rupees(b.remaining)}*`,
     ``,
     `Your slot is still held for you. Please send the balance and share the screenshot, and we will confirm your booking.`,
   ].join("\n");

@@ -1,6 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  /*
+   * Where the build output goes. Overridable so a second server can be run
+   * against the same source without the two of them overwriting each other's
+   * chunks — which is how a page can serve correct HTML and then fail to load
+   * a single script. Unset, which is every normal run, it is the usual `.next`.
+   */
+  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   // This project sits under a directory that has other lockfiles; pin the trace
   // root so Next does not infer a parent folder as the workspace.
   outputFileTracingRoot: import.meta.dirname,

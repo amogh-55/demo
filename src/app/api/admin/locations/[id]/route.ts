@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { recordAudit, requireAdmin } from "@/lib/auth";
+import { forgetResourceContext } from "@/lib/booking/service";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { locationUpdateSchema } from "@/lib/validation";
@@ -30,6 +31,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (!updated) throw appError("NOT_FOUND", "That location does not exist.");
 
     await recordAudit(admin, "LOCATION_UPDATED", "location", id.toHexString(), { fields: Object.keys(patch) });
+    // The cached resource context still describes this as it was, so it is
+    // dropped now the write has landed — the owner sees their own edit at
+    // once rather than whenever the short TTL happens to lapse.
+    forgetResourceContext();
     return ok({ location: { id: updated._id.toHexString(), name: updated.name, active: updated.active } });
   } catch (err) {
     return fail(err, { route: "PATCH /api/admin/locations/[id]" });
