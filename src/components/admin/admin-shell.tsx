@@ -67,12 +67,15 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
     // Opaque, not `bg-ink-50/60`: the document body is dark for the customer site,
     // so a translucent light surface composites over near-black and turns muddy.
     <div className="theme-light min-h-dvh bg-ink-50 text-ink-900 lg:flex">
-      <aside className="hidden w-60 shrink-0 border-r border-ink-200 bg-white lg:flex lg:flex-col">
+      {/* Pinned to the viewport, not to the document: the locations form runs to
+          several screens, and a sidebar that scrolls away with it leaves the
+          owner with no way back except scrolling all the way up again. */}
+      <aside className="hidden w-60 shrink-0 border-r border-ink-200 bg-white lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col">
         <div className="flex h-16 items-center gap-2 border-b border-ink-100 px-5">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-pitch-600 text-sm text-white">🏏</span>
           <span className="font-semibold text-ink-900">Turf Admin</span>
         </div>
-        <nav className="flex-1 space-y-1 p-3" aria-label="Admin sections">
+        <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="Admin sections">
           {NAV.map((item) => {
             const on = isActive(item.href);
             const loading = pendingHref === item.href;

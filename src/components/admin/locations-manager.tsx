@@ -197,9 +197,15 @@ function scheduleProblems(config: FacilityConfig, kind: "HOURLY" | "OVERS"): Pro
   }
 
   const checkBands = (rules: PriceRule[], prefix: string, label: string) => {
+    // The hours are named rather than called "these hours", because the summary
+    // at the foot of the form lists every problem together, and three identical
+    // lines saying "Set a price for these hours" tell the owner nothing about
+    // which three bands are empty.
+    const which = prefix === "weekend" ? "weekend price" : "price";
     rules.forEach((rule, i) => {
+      const when = `${formatMinutes(rule.fromMin)}–${formatMinutes(rule.toMin)}`;
       if (rule.toMin <= rule.fromMin) p[`${prefix}-range-${i}`] = "The end of a band must be after its start.";
-      if (!isSet(rule.price)) p[`${prefix}-price-${i}`] = "Set a price for these hours.";
+      if (!isSet(rule.price)) p[`${prefix}-price-${i}`] = `Set a ${which} for ${when}.`;
       else if (rule.price < 0) p[`${prefix}-price-${i}`] = "A price cannot be negative.";
     });
 
@@ -641,32 +647,7 @@ function ResourcesEditor({
   resources: AdminResource[];
   onChanged: () => Promise<void>;
 }) {
-  const [newName, setNewName] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-
-  async function add() {
-    if (busy || newName.trim().length < 1) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api("/api/admin/resources", {
-        method: "POST",
-        body: JSON.stringify({
-          facilityId: facility.id,
-          name: newName.trim(),
-          slug: slugify(`${facility.slug}-${newName}`),
-          sortOrder: resources.length,
-        }),
-      });
-      setNewName("");
-      await onChanged();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function toggle(resource: AdminResource) {
     setError(null);
@@ -686,6 +667,7 @@ function ResourcesEditor({
       <h2 className="break-words font-semibold text-ink-900">Bookable courts · {facility.name}</h2>
       <p className="mt-1 text-sm text-ink-600">
         Each one is booked and blocked on its own. Two courts here means two customers can play at the same hour.
+        Hide one to take it off the customer&apos;s grid.
       </p>
 
       <ul className="mt-3 divide-y divide-ink-100">
@@ -709,14 +691,6 @@ function ResourcesEditor({
         ))}
       </ul>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-[1fr,auto] sm:items-end">
-        <Text label="Add another (e.g. Court 2)" value={newName} onChange={setNewName} />
-        <Button className="h-11 sm:h-[42px]" onClick={add} disabled={busy || newName.trim().length < 1}>
-          {busy ? <Spinner /> : null}
-          Add
-        </Button>
-      </div>
-
       {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
     </section>
   );
@@ -738,9 +712,10 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
    * customer's grid. Opening at midnight and finding nothing bookable before 6
    * looks exactly like a broken site.
    *
-   * So the bands are stretched to follow the hours: an empty band is laid down
-   * over whatever the change exposed, and the validation below refuses to save
-   * until a price is typed into it.
+   * So the bands follow the hours in both directions: an empty band is laid
+   * down over whatever the change exposed, the validation below refuses to save
+   * until a price is typed into it, and narrowing the hours takes those empty
+   * bands away again.
    */
   const update = (patch: Partial<FacilityConfig>) => {
     setConfig((current) => {
@@ -748,8 +723,22 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
       const hoursMoved = patch.openMin !== undefined || patch.closeMin !== undefined;
       if (!hoursMoved || facility.kind !== "HOURLY" || !(next.closeMin > next.openMin)) return next;
 
-      const fill = (rules: PriceRule[]) =>
-        rules.length === 0 ? rules : [...rules, ...gapBands(rules, next.openMin, next.closeMin, next.slotMinutes)];
+      const fill = (rules: PriceRule[]) => {
+        if (rules.length === 0) return rules;
+        /*
+         * Narrowing the hours again has to take those placeholders back out.
+         * Otherwise opening at midnight and changing your mind leaves an empty
+         * 12 AM–6 AM band sitting outside the hours, demanding a price for time
+         * the ground is now shut.
+         *
+         * Only the empty ones go. A band with a price in it is the owner's own
+         * work, and hours get nudged by accident.
+         */
+        const kept = rules.filter(
+          (rule) => isSet(rule.price) || (rule.toMin > next.openMin && rule.fromMin < next.closeMin),
+        );
+        return kept.length === 0 ? kept : [...kept, ...gapBands(kept, next.openMin, next.closeMin, next.slotMinutes)];
+      };
 
       return {
         ...next,

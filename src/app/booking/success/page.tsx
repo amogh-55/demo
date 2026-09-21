@@ -9,7 +9,7 @@ import { getSettings } from "@/lib/settings";
 import { formatBusinessDate, formatIstTimestamp, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, formatCurrency } from "@/components/ui/primitives";
 import { ReceiptActions } from "@/components/customer/receipt-actions";
-import { whatsappUrl } from "@/lib/whatsapp";
+import { customerIntroMessage, whatsappUrl } from "@/lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 
@@ -138,10 +138,7 @@ export default async function BookingSuccessPage() {
                 className="flex-1"
                 target="_blank"
                 rel="noopener noreferrer"
-                href={whatsappUrl(
-                  settings.whatsappNumber,
-                  `Hi ${settings.businessName}, I have submitted booking ${booking.reference}.`,
-                )}
+                href={whatsappUrl(settings.whatsappNumber, customerIntroMessage(booking))}
               >
                 <Button variant="whatsapp" className="w-full">
                   Message the turf

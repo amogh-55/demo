@@ -203,7 +203,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     ]);
 
     const base = {
-      businessName: settings.businessName,
       reference: booking.reference,
       customerName: booking.customerName,
       locationName: booking.locationName,

@@ -12,7 +12,14 @@ import {
   locationCreateSchema,
   utrSchema,
 } from "../src/lib/validation";
-import { normaliseWhatsappNumber, confirmationMessage, rejectionMessage, whatsappUrl } from "../src/lib/whatsapp";
+import {
+  customerIntroMessage,
+  normaliseWhatsappNumber,
+  confirmationMessage,
+  rejectionMessage,
+  serviceLabel,
+  whatsappUrl,
+} from "../src/lib/whatsapp";
 import { readJson } from "../src/lib/api";
 
 describe("phone numbers", () => {
@@ -258,7 +265,6 @@ describe("settings and login", () => {
 
 describe("WhatsApp links", () => {
   const booking = {
-    businessName: "Greenfield Turf",
     reference: "TURF-7K92AB",
     customerName: "Ravi",
     locationName: "Uppal",
@@ -298,23 +304,28 @@ describe("WhatsApp links", () => {
     const message = confirmationMessage({ ...booking, paid: 200 });
     assert.ok(message.includes("Total: ₹1,600"), message);
     assert.ok(message.includes("Advance received: ₹200"), message);
-    assert.ok(message.includes("To pay at the ground: ₹1,400"), message);
-    assert.ok(message.includes("bring the balance"), message);
+    assert.ok(message.includes("Balance left: ₹1,400"), message);
   });
 
   it("asks for the whole amount when nothing has been paid", () => {
     const message = confirmationMessage({ ...booking, paid: 0 });
     assert.ok(message.includes("Total: ₹1,600"), message);
     assert.ok(!message.includes("Advance received"), "there was no advance to name");
-    assert.ok(message.includes("To pay at the ground: ₹1,600"), message);
+    assert.ok(message.includes("Balance left: ₹1,600"), message);
   });
 
   it("says nothing about a balance when the booking is paid in full", () => {
     for (const paid of [1600, 2000, undefined]) {
       const message = confirmationMessage({ ...booking, paid });
       assert.ok(message.includes("Amount paid: ₹1,600"), message);
-      assert.ok(!message.includes("To pay at the ground"), `paid ${String(paid)}: ${message}`);
-      assert.ok(!message.includes("bring the balance"), message);
+      assert.ok(!message.includes("Balance left"), `paid ${String(paid)}: ${message}`);
+    }
+  });
+
+  it("signs off without naming a business, because each ground has its own name", () => {
+    for (const message of [confirmationMessage(booking), confirmationMessage({ ...booking, paid: 200 })]) {
+      assert.ok(message.includes("Please arrive 10 minutes early. See you!"), message);
+      assert.ok(!message.includes("See you at"), message);
     }
   });
 
@@ -322,6 +333,67 @@ describe("WhatsApp links", () => {
     const message = rejectionMessage({ ...booking, reason: "Payment not received" });
     assert.ok(message.includes("could not be confirmed"));
     assert.ok(message.includes("Payment not received"));
+  });
+});
+
+describe("the message a customer sends the turf", () => {
+  const base = {
+    reference: "TURF-GD8Q5M",
+    customerName: "Ravi",
+    locationName: "Medipally",
+    date: "2026-10-10",
+    startMin: 15 * 60,
+    endMin: 21 * 60,
+  };
+
+  it("names the person, the service, the ground and the time", () => {
+    const message = customerIntroMessage({ ...base, facilityName: "Box Cricket", resourceName: "Box Cricket" });
+    assert.equal(
+      message,
+      [
+        "Hi, I am Ravi.",
+        "I booked Box Cricket at Medipally on Sat, 10 Oct 2026, 3:00 PM – 9:00 PM.",
+        "",
+        "Booking ID: TURF-GD8Q5M",
+      ].join("\n"),
+    );
+  });
+
+  /*
+   * A bowling session is sold in overs, so that is the number the customer will
+   * quote at the gate. The clock time still has to be there, because that is
+   * what the slot grid actually reserved.
+   */
+  it("leads with the overs for a bowling machine booking", () => {
+    const message = customerIntroMessage({
+      ...base,
+      locationName: "Vanasthalipuram",
+      facilityName: "Bowling Machine",
+      resourceName: "Bowling Machine",
+      overs: 20,
+      ballTypeName: "Leather ball",
+      startMin: 9 * 60,
+      endMin: 9 * 60 + 30,
+    });
+    assert.ok(message.includes("I booked 20 overs on Bowling Machine (Leather ball) at Vanasthalipuram"), message);
+    assert.ok(message.includes("9:00 AM – 9:30 AM"), message);
+  });
+
+  it("names the court only where the ground has more than one", () => {
+    assert.equal(serviceLabel({ facilityName: "Pickleball", resourceName: "Court 2" }), "Pickleball Court 2");
+    // Every single-court facility names its one resource after itself.
+    assert.equal(serviceLabel({ facilityName: "Nets", resourceName: "Nets" }), "Nets");
+  });
+
+  it("survives the fields a booking may legitimately not have", () => {
+    assert.equal(serviceLabel({ facilityName: "Nets", resourceName: "Nets", overs: null, ballTypeName: null }), "Nets");
+    // Zero overs is not a booking of nothing; it means this is not an overs facility.
+    assert.equal(serviceLabel({ facilityName: "Nets", resourceName: "Nets", overs: 0 }), "Nets");
+    assert.equal(serviceLabel({ facilityName: "  ", resourceName: "  " }), "the ground");
+    assert.equal(
+      serviceLabel({ facilityName: "Bowling Machine", resourceName: "", overs: 70, ballTypeName: "  " }),
+      "70 overs on Bowling Machine",
+    );
   });
 });
 

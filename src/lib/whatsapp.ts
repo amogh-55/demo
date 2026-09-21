@@ -14,7 +14,6 @@ export function whatsappUrl(phone: string, message: string): string {
 }
 
 export interface BookingMessageInput {
-  businessName: string;
   reference: string;
   customerName: string;
   locationName: string;
@@ -49,7 +48,7 @@ export function confirmationMessage(
       ? [
           `Total: ${rupees(b.amount)}`,
           ...(received > 0 ? [`Advance received: ${rupees(received)}`] : []),
-          `*To pay at the ground: ${rupees(remaining)}*`,
+          `*Balance left: ${rupees(remaining)}*`,
         ]
       : [`Amount paid: ${rupees(b.amount)}`];
 
@@ -63,8 +62,7 @@ export function confirmationMessage(
     `Time: ${formatRange(b.startMin, b.endMin)}`,
     ...amountLines,
     ``,
-    ...(remaining > 0 ? [`Please bring the balance with you.`] : []),
-    `Please arrive 10 minutes early. See you at ${b.businessName}!`,
+    `Please arrive 10 minutes early. See you!`,
   ].join("\n");
 }
 
@@ -99,5 +97,51 @@ export function rejectionMessage(b: BookingMessageInput & { reason: string }): s
     `Reason: ${b.reason}`,
     ``,
     ...(b.supportPhone ? [`Please contact us on ${b.supportPhone} if you need assistance.`] : ["Please contact us if you need assistance."]),
+  ].join("\n");
+}
+
+export interface BookedServiceInput {
+  facilityName: string;
+  resourceName: string;
+  /** OVERS facilities only: what the customer actually bought. */
+  overs?: number | null;
+  ballTypeName?: string | null;
+}
+
+/**
+ * What was booked, phrased the way the customer would say it: "20 overs on
+ * Bowling Machine (Leather ball)", or "Pickleball Court 2".
+ *
+ * The court is named only where it differs from the facility, because every
+ * single-court facility names its one resource after itself and "Nets Nets"
+ * helps nobody.
+ */
+export function serviceLabel(b: BookedServiceInput): string {
+  const facility = b.facilityName?.trim() || "the ground";
+  const resource = b.resourceName?.trim();
+  const what = resource && resource !== facility ? `${facility} ${resource}` : facility;
+  const ball = b.ballTypeName?.trim() ? ` (${b.ballTypeName.trim()})` : "";
+  // Overs are the unit the customer bought, so they lead; the clock time still
+  // follows, because a bowling session is booked into a slot like anything else.
+  return b.overs && b.overs > 0 ? `${b.overs} overs on ${what}${ball}` : `${what}${ball}`;
+}
+
+/**
+ * The message the customer sends from the success page.
+ *
+ * It has to stand on its own in the turf's WhatsApp inbox, which is why it
+ * names the person, the ground, the service and the time rather than only the
+ * reference — a reference means nothing to whoever picks up the phone until
+ * they have gone and looked it up.
+ */
+export function customerIntroMessage(
+  b: BookedServiceInput &
+    Pick<BookingMessageInput, "reference" | "customerName" | "locationName" | "date" | "startMin" | "endMin">,
+): string {
+  return [
+    `Hi, I am ${b.customerName}.`,
+    `I booked ${serviceLabel(b)} at ${b.locationName} on ${formatBusinessDate(b.date)}, ${formatRange(b.startMin, b.endMin)}.`,
+    ``,
+    `Booking ID: ${b.reference}`,
   ].join("\n");
 }
