@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, ChevronDown, Clock, Copy, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
 import { ApiError, api, errorMessage } from "@/lib/client";
 import { hoursTouched, runIsFree } from "@/lib/booking/schedule";
-import { facilityPhoto } from "@/lib/photos";
+import { facilityPhoto, locationCover } from "@/lib/photos";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
@@ -774,7 +774,7 @@ export function BookingFlow({
                     )}
                   >
                     <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-md bg-white/10">
-                      <Image src={l.image || "/images/box-cricket-turf.jpg"} alt="" fill sizes="56px" className="object-cover" />
+                      <Image src={locationCover(l.slug, l.image)} alt="" fill sizes="56px" className="object-cover" />
                     </span>
                     <span className="min-w-0">
                       <span className="flex items-center gap-1.5 break-words font-semibold text-white">

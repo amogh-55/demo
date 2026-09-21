@@ -92,7 +92,7 @@ const LOCATIONS: SeedLocation[] = [
     address: "Medipally, Hyderabad, Telangana",
     mapsUrl: "",
     description: "Box cricket, practice nets and a bowling machine under floodlights.",
-    image: "/images/floodlight-turf.jpg",
+    image: "",
     phone: "7730825514",
     facilities: [
       {
@@ -140,7 +140,7 @@ const LOCATIONS: SeedLocation[] = [
     address: "Vanasthalipuram, Hyderabad, Telangana",
     mapsUrl: "",
     description: "Bowling machine sessions by the over.",
-    image: "/images/box-cricket-turf.jpg",
+    image: "",
     phone: "7730825514",
     facilities: [
       {
@@ -161,7 +161,7 @@ const LOCATIONS: SeedLocation[] = [
     address: "Uppal, Hyderabad, Telangana",
     mapsUrl: "",
     description: "Two floodlit pickleball courts, booked by the hour.",
-    image: "/images/cricket-sunset.jpg",
+    image: "",
     phone: "7730825514",
     facilities: [
       {

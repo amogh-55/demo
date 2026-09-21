@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
 import { getPublicCatalog } from "@/lib/catalog";
+import { locationCover } from "@/lib/photos";
 import { getSettings } from "@/lib/settings";
 import { formatMinutes } from "@/lib/time";
 import { Button, formatCurrency } from "@/components/ui/primitives";
@@ -80,8 +81,16 @@ export default async function HomePage() {
       <main id="main">
         {/* ── Hero ─────────────────────────────────────────────────────── */}
         <section className="relative isolate overflow-hidden">
-          <Image src="/images/hero-turf-action.jpg" alt="" fill priority sizes="100vw" className="object-cover opacity-40" />
-          <div className="absolute inset-0 bg-gradient-to-b from-ink-950/70 via-ink-950/85 to-ink-950" />
+          <Image
+            src="/images/box.jpg"
+            alt=""
+            fill
+            priority
+            sizes="(max-width: 640px) 100vw, 1200px"
+            quality={50}
+            className="object-cover object-[50%_50%] opacity-[0.7]"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-ink-950/75 via-ink-950/60 to-ink-950" />
           <div className="absolute inset-0 bg-pitch-glow" />
 
           <div className="container relative py-20 sm:py-28 lg:py-36">
@@ -156,14 +165,14 @@ export default async function HomePage() {
             </p>
           ) : (
             <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              {locations.map((location, index) => (
+              {locations.map((location) => (
                 <li
                   key={location.id}
                   className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] transition-colors hover:border-lime-400/40"
                 >
                   <div className="relative h-48 w-full overflow-hidden bg-ink-900">
                     <Image
-                      src={location.image || ["/images/floodlight-turf.jpg", "/images/box-cricket-turf.jpg", "/images/cricket-sunset.jpg"][index % 3]!}
+                      src={locationCover(location.slug, location.image)}
                       alt={location.name}
                       fill
                       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
@@ -326,8 +335,8 @@ export default async function HomePage() {
 
             <div className="relative min-h-[320px] overflow-hidden rounded-2xl border border-white/10">
               <Image
-                src="/images/cricket-stadium.jpg"
-                alt="Floodlit cricket ground at dusk"
+                src="/images/boxpeople.jpg"
+                alt="A group of players on the turf after their game"
                 fill
                 sizes="(max-width: 1024px) 100vw, 50vw"
                 className="object-cover"

@@ -12,6 +12,15 @@ const nextConfig = {
   // root so Next does not infer a parent folder as the workspace.
   outputFileTracingRoot: import.meta.dirname,
   poweredByHeader: false,
+  images: {
+    /*
+     * A quality has to be declared here or `quality={n}` on an <Image> is
+     * quietly ignored and served at 75 anyway. The hero is the one that needs
+     * it: a decorative photograph sitting at 70% opacity under a dark gradient,
+     * where the detail a high quality buys is thrown away before anyone sees it.
+     */
+    qualities: [50, 75],
+  },
   async headers() {
     return [
       {
