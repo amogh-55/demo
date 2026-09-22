@@ -34,6 +34,24 @@ describe("phone numbers", () => {
       assert.equal(phoneSchema.safeParse(input).success, false, `should reject ${input}`);
     }
   });
+
+  /**
+   * A reported case: 9121563584 is a real mobile that begins 91, and stripping
+   * the country code on sight took two digits off it. Eight digits left, so the
+   * customer was told their own number was not a valid number — on the booking
+   * form as much as on verification, because everything shares this schema.
+   */
+  it("keeps a number that starts with 91 but is not country-coded", () => {
+    for (const input of ["9121563584", "9111111111", "9199999999".padEnd(10, "9")]) {
+      assert.equal(phoneSchema.parse(input), input, `mangled ${input}`);
+    }
+  });
+
+  it("still strips the country code when one is really there", () => {
+    for (const input of ["919121563584", "+919121563584", "+91 91215 63584", "09121563584", "00919121563584"]) {
+      assert.equal(phoneSchema.parse(input), "9121563584", `failed for ${input}`);
+    }
+  });
 });
 
 describe("customer name", () => {

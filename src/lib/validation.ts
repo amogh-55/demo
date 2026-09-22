@@ -15,12 +15,21 @@ export const minuteOfDaySchema = z.number().int().min(0).max(MINUTES_IN_DAY);
 /**
  * Indian mobile numbers. Accepts +91 / 91 / 0 prefixes and spaces, dashes or
  * brackets; stores the bare 10 digits. First digit must be 6-9.
+ *
+ * A prefix is only stripped when what is left is still a whole number. Stripping
+ * "91" on sight is wrong: 9121563584 is a real mobile that begins 91, and taking
+ * two digits off it left eight and a customer who could not book at all.
  */
 export const phoneSchema = z
   .string()
   .trim()
   .transform((raw) => raw.replace(/[\s()\-.]/g, ""))
-  .transform((v) => v.replace(/^\+?91/, "").replace(/^0+/, ""))
+  .transform((v) => {
+    const digits = v.replace(/^\+/, "").replace(/^00/, "");
+    if (/^91\d{10}$/.test(digits)) return digits.slice(2);
+    if (/^0\d{10}$/.test(digits)) return digits.slice(1);
+    return digits;
+  })
   .refine((v) => /^[6-9]\d{9}$/.test(v), "Enter a valid 10-digit Indian mobile number");
 
 export const customerNameSchema = z
