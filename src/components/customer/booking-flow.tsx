@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, ChevronDown, Clock, Copy, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
 import { ApiError, api, errorMessage } from "@/lib/client";
-import { hoursTouched, runIsFree } from "@/lib/booking/schedule";
+import { freeRunLength, hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto, locationCover } from "@/lib/photos";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
@@ -446,6 +446,19 @@ export function BookingFlow({
       return runIsFree(availability.slotMinutes, freeStarts, startMin, sessionSlots);
     },
     [availability, sessionSlots, freeStarts],
+  );
+
+  /**
+   * What the customer could have from a start that cannot hold their session —
+   * the clash is usually a booking three quarters away, which they cannot see
+   * from the button they pressed.
+   */
+  const oversThatFitAt = React.useCallback(
+    (startMin: number) =>
+      availability && sessionSlots > 0
+        ? freeRunLength(availability.slotMinutes, freeStarts, startMin, sessionSlots) * availability.oversPerSlot
+        : 0,
+    [availability, freeStarts, sessionSlots],
   );
 
   const anyStartFits = React.useMemo(
@@ -1144,7 +1157,9 @@ export function BookingFlow({
                                 <span className={freeStartCount > 0 ? "text-ink-300" : "text-ink-500"}>
                                   {freeStartCount > 0
                                     ? `${freeStartCount} start${freeStartCount === 1 ? "" : "s"} free`
-                                    : "Nothing free"}
+                                    : group.units.some((u) => u.status === "AVAILABLE")
+                                      ? `Too short for ${overs} overs`
+                                      : "Nothing free"}
                                 </span>
                                 <ChevronDown
                                   className={cn("h-4 w-4 shrink-0 text-ink-400 transition-transform", expanded ? "rotate-180" : "")}
@@ -1191,8 +1206,9 @@ export function BookingFlow({
                                           {fits || inSelection
                                             ? `${availability.oversPerSlot} overs · ${formatCurrency(ball?.pricePerSlot)}`
                                             : free
-                                              // Free itself, but a later quarter it needs is not.
-                                              ? "Not enough time"
+                                              // Free itself, but a later quarter it needs is not. Say how far
+                                              // the machine is actually theirs from here.
+                                              ? `Only ${oversThatFitAt(unit.startMin)} overs fit`
                                               : statusLabel(unit.status)}
                                         </span>
                                       </button>

@@ -129,6 +129,16 @@ export const otpVerifySchema = z.object({
   code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code we sent you"),
 });
 
+/**
+ * What the browser sends back after MSG91's widget has verified a number. The
+ * token is checked with MSG91 before it counts for anything, so the only job
+ * here is to refuse a body that could not possibly be one.
+ */
+export const otpWidgetVerifySchema = z.object({
+  phone: phoneSchema,
+  accessToken: z.string().trim().min(16).max(4096),
+});
+
 export const adminLoginSchema = z.object({
   username: z.string().trim().min(3).max(60),
   password: z.string().min(8).max(200),

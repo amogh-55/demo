@@ -137,10 +137,28 @@ export function runIsFree(
   startMin: number,
   slots: number,
 ): boolean {
-  for (let i = 0; i < slots; i += 1) {
-    if (!freeStarts.has(startMin + i * slotMinutes)) return false;
-  }
-  return true;
+  return freeRunLength(slotMinutes, freeStarts, startMin, slots) === slots;
+}
+
+/**
+ * How many consecutive units are free from `startMin`, counting no further than
+ * `max`.
+ *
+ * What a refused start time is actually worth. "Not enough time" leaves the
+ * customer to work out by hand which of sixty-eight buttons the clash is behind;
+ * the run length says what they can have from the start they picked, which is the
+ * question they were asking. It stops at `max` because nothing beyond the session
+ * they chose is worth counting.
+ */
+export function freeRunLength(
+  slotMinutes: number,
+  freeStarts: ReadonlySet<number>,
+  startMin: number,
+  max: number,
+): number {
+  let slots = 0;
+  while (slots < max && freeStarts.has(startMin + slots * slotMinutes)) slots += 1;
+  return slots;
 }
 
 /**

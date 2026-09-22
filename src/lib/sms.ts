@@ -61,6 +61,18 @@ export async function sendSms(phone: string, message: string): Promise<boolean> 
   const provider = smsProvider();
   const to = e164(phone);
 
+  /*
+   * A provider that is named but not fully configured is not a provider. Without
+   * this, SMS_PROVIDER=msg91 with no sender ID posts to MSG91 on every booking
+   * and every code, each one failing on their side — which reaches the owner as
+   * an "SMS API Failed" alert rather than anything in our logs. Treated as
+   * unconfigured, it behaves exactly as leaving SMS_PROVIDER blank does.
+   */
+  if (provider !== "log" && !smsConfigured()) {
+    log.warn("sms_provider_incomplete", { provider });
+    return false;
+  }
+
   try {
     if (provider === "msg91") {
       const params = new URLSearchParams({

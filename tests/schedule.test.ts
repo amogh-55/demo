@@ -9,6 +9,7 @@ import {
   oversLadder,
   priceForStart,
   resolveUnits,
+  freeRunLength,
   runIsFree,
   slotsForOvers,
   totalPrice,
@@ -218,6 +219,43 @@ describe("whether a session fits at a start time", () => {
   it("refuses a run that would continue past the end of the day", () => {
     assert.equal(runIsFree(15, free(1365), 1365, 1), true);
     assert.equal(runIsFree(15, free(1365), 1365, 2), false);
+  });
+});
+
+/**
+ * The reported case: 50 overs from 1:45 PM was refused with "Not enough time"
+ * while 2:45 PM was booked three quarters later, which the customer could not
+ * see from the button they pressed.
+ */
+describe("how much of a session does fit at a start time", () => {
+  const free = (...starts: number[]) => new Set(starts);
+  /** 1:45 PM onwards in minutes, with 2:45 PM taken by another booking. */
+  const afternoon = free(825, 840, 855, 870); // 885 (2:45 PM) missing
+
+  it("counts the quarters free before the clash", () => {
+    assert.equal(freeRunLength(15, afternoon, 825, 5), 4, "40 of the 50 overs fit");
+  });
+
+  it("counts the whole session when nothing is in the way", () => {
+    assert.equal(freeRunLength(15, free(825, 840, 855, 870, 885), 825, 5), 5);
+  });
+
+  it("never counts past what was asked for", () => {
+    assert.equal(freeRunLength(15, free(825, 840, 855, 870, 885, 900), 825, 2), 2);
+  });
+
+  it("is zero from a quarter that is itself taken", () => {
+    assert.equal(freeRunLength(15, afternoon, 885, 5), 0);
+  });
+
+  it("agrees with runIsFree", () => {
+    for (const slots of [1, 2, 3, 4, 5]) {
+      assert.equal(
+        freeRunLength(15, afternoon, 825, slots) === slots,
+        runIsFree(15, afternoon, 825, slots),
+        `${slots} slots`,
+      );
+    }
   });
 });
 
