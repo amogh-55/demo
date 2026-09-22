@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { fail, ok } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
-import { loadResourceContext } from "@/lib/booking/service";
+import { isPastSlot, loadResourceContext } from "@/lib/booking/service";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { isValidBusinessDate } from "@/lib/time";
@@ -55,6 +55,9 @@ export async function GET(request: Request) {
               : "AVAILABLE"
             : unit.status;
       }
+      // Same rule the customer grid uses. Staff could pick this morning's 6 AM,
+      // fill in a whole phone booking and only then be told the time had passed.
+      if (status === "AVAILABLE" && isPastSlot(date, slot.startMin, now)) status = "PAST";
       const booking = unit?.bookingId ? byBookingId.get(unit.bookingId.toHexString()) : undefined;
 
       return {

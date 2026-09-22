@@ -1,4 +1,4 @@
-import { istWeekday } from "@/lib/time";
+import { istDateString, istInstant, istWeekday } from "@/lib/time";
 import type { BallType, FacilityConfig, PriceRule } from "@/lib/types";
 
 export interface SlotUnitTemplate {
@@ -186,4 +186,35 @@ export function hoursTouched(startMin: number, endMin: number): number[] {
   const hours: number[] = [];
   for (let m = Math.floor(startMin / 60) * 60; m < endMin; m += 60) hours.push(m);
   return hours;
+}
+
+/**
+ * What a customer may pay now to hold this booking, in whole rupees.
+ *
+ * Zero when the facility takes no advance, and zero when the sum would be the
+ * whole amount anyway — half of nothing is not a payment option, and offering
+ * "pay 100% now" beside "pay 100% now" is just two buttons.
+ *
+ * Rounded up, so the ground is never short by the half-rupee: half of ₹701 is
+ * ₹351 now and ₹350 at the gate.
+ */
+export function advanceFor(config: FacilityConfig, amount: number): number {
+  const percent = config.advancePercent ?? 0;
+  if (percent <= 0 || percent >= 100 || amount <= 0) return 0;
+  const advance = Math.ceil((amount * percent) / 100);
+  return advance > 0 && advance < amount ? advance : 0;
+}
+
+
+
+/**
+ * Whether a slot's start time is already behind us.
+ *
+ * Shared by the customer grid and the admin one because they disagreed: the
+ * public page greyed this morning out, the admin page offered it, and staff only
+ * found out by picking 6 AM, filling in a whole phone booking and being refused
+ * on save. The clock is the same clock for everyone.
+ */
+export function isPastSlot(date: string, startMin: number, now: Date): boolean {
+  return date <= istDateString(now) && istInstant(date, startMin).getTime() <= now.getTime();
 }

@@ -20,9 +20,11 @@ import type {
   SlotUnitDoc,
 } from "@/lib/types";
 import {
+  advanceFor,
   applyBallPricing,
   buildDayTemplate,
   findBallType,
+  isPastSlot,
   isWeekendRate,
   oversLadder,
   resolveUnits,
@@ -30,6 +32,11 @@ import {
   totalPrice,
   type SlotUnitTemplate,
 } from "./schedule";
+
+// Re-exported because both are part of this module's public surface as far as the
+// routes are concerned; they live in schedule.ts because they are pure arithmetic
+// and importing this file drags in the database driver.
+export { advanceFor, isPastSlot };
 import { generateBookingReference, generateHoldToken, hashHoldToken } from "./reference";
 
 /**
@@ -57,6 +64,8 @@ export const DEFAULT_HOURLY_CONFIG: FacilityConfig = {
   weekendDays: [5, 6, 0],
   oversPerSlot: 0,
   payAtVenueMaxOvers: 0,
+  // Full amount up front until the owner says otherwise.
+  advancePercent: 0,
   ballTypes: [],
 };
 
@@ -80,6 +89,7 @@ export const DEFAULT_OVERS_CONFIG: FacilityConfig = {
   weekendDays: [5, 6, 0],
   oversPerSlot: 10,
   payAtVenueMaxOvers: 40,
+  advancePercent: 0,
   ballTypes: [
     { id: "synthetic", name: "Synthetic ball", pricePerSlot: 180 },
     { id: "leather", name: "Leather ball", pricePerSlot: 100 },
@@ -305,14 +315,11 @@ export async function getAvailability(
   ]);
 
   const byStart = new Map(stored.map((u) => [u.startMin, u]));
-  const today = istDateString(now);
 
   const units: AvailabilityUnit[] = template.map((slot) => {
     let status: PublicSlotStatus = dayBlock ? "BLOCKED" : liveStatus(byStart.get(slot.startMin), now);
     // A slot whose start time has already passed is never bookable, including today.
-    if (status === "AVAILABLE" && date <= today && istInstant(date, slot.startMin).getTime() <= now.getTime()) {
-      status = "PAST";
-    }
+    if (status === "AVAILABLE" && isPastSlot(date, slot.startMin, now)) status = "PAST";
     return { startMin: slot.startMin, endMin: slot.endMin, price: slot.price, status };
   });
 
@@ -402,6 +409,8 @@ export interface HoldResult {
   /** True when this session is confirmed on the spot and paid for at the ground. */
   payAtVenue: boolean;
   amount: number;
+  /** What may be paid online to hold this, or 0 when the full amount is due. */
+  advanceAmount: number;
   breakdown: Array<{ startMin: number; endMin: number; price: number }>;
 }
 
@@ -646,6 +655,7 @@ export async function createHold(
     ballTypeName: ballType?.name ?? null,
     payAtVenue: isPayAtVenue(config, overs),
     amount: totalPrice(units),
+    advanceAmount: advanceFor(config, totalPrice(units)),
     breakdown: units.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price })),
   };
 }
@@ -665,6 +675,7 @@ export interface HoldSnapshot {
   ballTypeName: string | null;
   payAtVenue: boolean;
   amount: number;
+  advanceAmount: number;
   breakdown: Array<{ startMin: number; endMin: number; price: number }>;
   /** Set when this hold was already turned into a booking — used for refresh recovery. */
   submittedBookingReference: string | null;
@@ -696,6 +707,7 @@ export async function getHold(holdToken: string, now: Date = new Date()): Promis
         ballTypeName: booking.ballTypeName,
         payAtVenue: Boolean(booking.payAtVenue),
         amount: booking.amount,
+        advanceAmount: booking.amountDueNow && booking.amountDueNow < booking.amount ? booking.amountDueNow : 0,
         breakdown: booking.priceBreakdown,
         submittedBookingReference: booking.reference,
       };
@@ -727,6 +739,7 @@ export async function getHold(holdToken: string, now: Date = new Date()): Promis
     ballTypeName: ballType?.name ?? null,
     payAtVenue: ctx ? isPayAtVenue(ctx.config, overs) : false,
     amount: units.reduce((sum, u) => sum + u.price, 0),
+    advanceAmount: ctx ? advanceFor(ctx.config, units.reduce((sum, u) => sum + u.price, 0)) : 0,
     breakdown: units.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price })),
     submittedBookingReference: null,
   };
@@ -798,6 +811,14 @@ export interface SubmitBookingInput {
    * derived from anything the client said.
    */
   storageFailed?: boolean;
+  /**
+   * The customer chose to pay the advance rather than the whole amount.
+   *
+   * A preference, not a figure: what that advance is worth is computed here from
+   * the facility's own configuration and this booking's own total. A client that
+   * sends this for a facility taking no advance simply pays in full.
+   */
+  payAdvance?: boolean;
   now?: Date;
 }
 
@@ -907,6 +928,14 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
 
   const priceBreakdown = resolved.map((u) => ({ startMin: u.startMin, endMin: u.endMin, price: u.price }));
   const amount = totalPrice(resolved);
+  /*
+   * What this customer owes online. The advance is offered only when the facility
+   * is configured for one and the customer asked for it — and never on a session
+   * already paid for at the ground or written in by staff, where there is no
+   * online payment for an advance to be part of.
+   */
+  const advance = advanceFor(config, amount);
+  const amountDueNow = !bookedBy && !payAtVenue && input.payAdvance && advance > 0 ? advance : amount;
   const unitStarts = units.map((u) => u.startMin);
 
   // Retry only for the (vanishingly rare) reference collision.
@@ -966,6 +995,7 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
           ]
         : [],
       amountPaid: 0,
+      amountDueNow,
       paymentScreenshotKey: input.paymentScreenshotKey,
       paymentUploadedAt: input.paymentScreenshotKey ? now : null,
       rejectionReason: null,

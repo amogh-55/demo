@@ -70,9 +70,12 @@ const BLOCK_REASONS = ["Tournament", "Maintenance", "Private event", "Weather"];
  * one under any circumstances — not even with `force`. Offering it as a choice
  * only produced a refusal after the owner had picked a reason and pressed Block,
  * so the grid says no where the answer is actually decided.
+ *
+ * PAST is the same argument about the clock: closing a time that has already been
+ * and gone changes nothing, and offering it invites the owner to think it did.
  */
 function isSelectable(unit: DayUnit | undefined): boolean {
-  return Boolean(unit) && unit!.status !== "BOOKED";
+  return Boolean(unit) && unit!.status !== "BOOKED" && unit!.status !== "PAST";
 }
 
 /** One slot in the grid. Extracted because the flat list and the hour accordion draw the same thing. */
@@ -94,7 +97,7 @@ function SlotTile({
       aria-pressed={selected}
       disabled={!selectable}
       onClick={onClick}
-      title={selectable ? undefined : "Confirmed bookings cannot be blocked"}
+      title={selectable ? undefined : unit.status === "PAST" ? "That time has already passed" : "Confirmed bookings cannot be blocked"}
       className={cn(
         "w-full rounded-lg border p-3 text-left transition-colors",
         !selectable
