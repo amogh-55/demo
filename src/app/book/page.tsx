@@ -5,6 +5,7 @@ import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
 import { getPublicCatalog, widestBookingWindow } from "@/lib/catalog";
 import { istDateString } from "@/lib/time";
 import { getSettings } from "@/lib/settings";
+import { widgetConfig } from "@/lib/msg91-widget";
 import { BookingFlow } from "@/components/customer/booking-flow";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,7 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
             bookingWindowDays={bookingWindowDays}
             locations={locations}
             otpEnabled={settings.otpEnabled}
+            otpWidget={widgetConfig()}
             payment={{
               businessName: settings.businessName,
               upiId: settings.upiId,

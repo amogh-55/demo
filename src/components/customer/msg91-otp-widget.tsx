@@ -93,6 +93,13 @@ function loadSdk(): Promise<void> {
 export interface Msg91OtpWidgetProps {
   widgetId: string;
   tokenAuth: string;
+  /**
+   * The number to verify, when the surrounding form already asked for one.
+   * Leave it out and the widget collects its own — which is what the test page
+   * does. Booking asks for a mobile number anyway, and asking twice invites the
+   * customer to verify one number and book with another.
+   */
+  phone?: string;
   /** Called with the ten-digit number once OUR server has confirmed it with MSG91. */
   onVerified?: (phone: string) => void;
 }
@@ -108,9 +115,11 @@ type Stage = "number" | "code" | "done";
  */
 const RESEND_SECONDS = 15;
 
-export function Msg91OtpWidget({ widgetId, tokenAuth, onVerified }: Msg91OtpWidgetProps) {
+export function Msg91OtpWidget({ widgetId, tokenAuth, phone: given, onVerified }: Msg91OtpWidgetProps) {
+  const controlled = given !== undefined;
   const [stage, setStage] = React.useState<Stage>("number");
-  const [phone, setPhone] = React.useState("");
+  const [ownPhone, setOwnPhone] = React.useState("");
+  const phone = controlled ? given : ownPhone;
   const [code, setCode] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -123,6 +132,20 @@ export function Msg91OtpWidget({ widgetId, tokenAuth, onVerified }: Msg91OtpWidg
 
   const phoneDigits = phone.replace(/\D/g, "").slice(-10);
   const phoneValid = /^[6-9]\d{9}$/.test(phoneDigits);
+
+  /*
+   * Editing the number in the form outside invalidates everything here: a code
+   * already sent went to the old number, and a verification already made was of
+   * the old number. Both have to go back to the start.
+   */
+  React.useEffect(() => {
+    if (!controlled) return;
+    setStage("number");
+    setCode("");
+    setError(null);
+    setNotice(null);
+    setResendIn(0);
+  }, [controlled, phoneDigits]);
 
   /* ── The widget itself ──────────────────────────────────────────────── */
 
@@ -308,24 +331,38 @@ export function Msg91OtpWidget({ widgetId, tokenAuth, onVerified }: Msg91OtpWidg
 
       {stage === "number" ? (
         <>
-          <label className="block text-sm font-medium text-ink-200" htmlFor="otp-phone">
-            Mobile number
-          </label>
-          <div className="flex gap-2">
-            <span className="flex h-11 items-center rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-ink-300">
-              +91
-            </span>
-            <input
-              id="otp-phone"
-              inputMode="numeric"
-              autoComplete="tel-national"
-              maxLength={10}
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
-              placeholder="9876543210"
-              className="h-11 w-full rounded-lg border border-white/15 bg-white/5 px-3 text-white placeholder:text-ink-500"
-            />
-          </div>
+          {controlled ? (
+            <p className="text-sm text-ink-300">
+              {phoneValid ? (
+                <>
+                  We will text a code to <strong className="text-white">+91 {phoneDigits}</strong>.
+                </>
+              ) : (
+                "Enter your mobile number above to verify it."
+              )}
+            </p>
+          ) : (
+            <>
+              <label className="block text-sm font-medium text-ink-200" htmlFor="otp-phone">
+                Mobile number
+              </label>
+              <div className="flex gap-2">
+                <span className="flex h-11 items-center rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-ink-300">
+                  +91
+                </span>
+                <input
+                  id="otp-phone"
+                  inputMode="numeric"
+                  autoComplete="tel-national"
+                  maxLength={10}
+                  value={ownPhone}
+                  onChange={(e) => setOwnPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="9876543210"
+                  className="h-11 w-full rounded-lg border border-white/15 bg-white/5 px-3 text-white placeholder:text-ink-500"
+                />
+              </div>
+            </>
+          )}
           <Button
             className="w-full"
             disabled={busy || !ready || !phoneValid || (captchaRequired && !captchaReady)}
@@ -366,19 +403,21 @@ export function Msg91OtpWidget({ widgetId, tokenAuth, onVerified }: Msg91OtpWidg
             >
               {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
             </button>
-            <button
-              type="button"
-              className="text-ink-300 underline underline-offset-4 hover:text-white"
-              disabled={busy}
-              onClick={() => {
-                setStage("number");
-                setCode("");
-                setError(null);
-                setNotice(null);
-              }}
-            >
-              Change number
-            </button>
+            {controlled ? null : (
+              <button
+                type="button"
+                className="text-ink-300 underline underline-offset-4 hover:text-white"
+                disabled={busy}
+                onClick={() => {
+                  setStage("number");
+                  setCode("");
+                  setError(null);
+                  setNotice(null);
+                }}
+              >
+                Change number
+              </button>
+            )}
           </div>
         </>
       )}

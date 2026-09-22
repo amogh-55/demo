@@ -7,6 +7,7 @@ import { ArrowLeft, Check, ChevronDown, Clock, Copy, ImageUp, MapPin, Navigation
 import { ApiError, api, errorMessage } from "@/lib/client";
 import { freeRunLength, hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto, locationCover } from "@/lib/photos";
+import { Msg91OtpWidget } from "./msg91-otp-widget";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
@@ -141,6 +142,7 @@ export function BookingFlow({
   today,
   bookingWindowDays,
   otpEnabled,
+  otpWidget,
 }: {
   locations: PublicLocation[];
   payment: PaymentSettings;
@@ -158,6 +160,12 @@ export function BookingFlow({
    * the server checks it again on submission, so a stale page cannot skip it.
    */
   otpEnabled: boolean;
+  /**
+   * MSG91's widget credentials, or null when they are not configured. Read on the
+   * server so they are not in a NEXT_PUBLIC_ variable; the AuthKey that makes a
+   * verification mean anything is never part of this and stays server-side.
+   */
+  otpWidget: { widgetId: string; tokenAuth: string } | null;
 }) {
   const router = useRouter();
 
@@ -186,12 +194,6 @@ export function BookingFlow({
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
 
-  const [otpSent, setOtpSent] = React.useState(false);
-  const [otpCode, setOtpCode] = React.useState("");
-  const [otpBusy, setOtpBusy] = React.useState(false);
-  const [otpError, setOtpError] = React.useState<string | null>(null);
-  const [otpNotice, setOtpNotice] = React.useState<string | null>(null);
-  const [resendIn, setResendIn] = React.useState(0);
   /** The exact number that was verified, so editing a digit invalidates it. */
   const [verifiedPhone, setVerifiedPhone] = React.useState<string | null>(null);
 
@@ -373,12 +375,6 @@ export function BookingFlow({
   }, [hold]);
 
   React.useEffect(() => {
-    if (resendIn <= 0) return;
-    const id = window.setInterval(() => setResendIn((s) => Math.max(0, s - 1)), 1000);
-    return () => window.clearInterval(id);
-  }, [resendIn]);
-
-  React.useEffect(() => {
     return () => {
       if (preview) URL.revokeObjectURL(preview);
     };
@@ -555,46 +551,6 @@ export function BookingFlow({
     setUtr("");
     setStep("slots");
     void loadAvailability();
-  }
-
-  async function sendCode() {
-    if (otpBusy || !phoneLooksValid(phone)) return;
-    setOtpBusy(true);
-    setOtpError(null);
-    setOtpNotice(null);
-    try {
-      const result = await api<{ resendAfterSeconds: number; delivered: boolean }>("/api/otp/send", {
-        method: "POST",
-        body: JSON.stringify({ phone }),
-      });
-      setOtpSent(true);
-      setResendIn(result.resendAfterSeconds);
-      setOtpNotice(
-        result.delivered
-          ? `Code sent to ${normalisePhone(phone)}.`
-          : "We could not send the code right now. Please call the ground to book.",
-      );
-    } catch (err) {
-      setOtpError(errorMessage(err));
-    } finally {
-      setOtpBusy(false);
-    }
-  }
-
-  async function checkCode() {
-    if (otpBusy || otpCode.trim().length !== 6) return;
-    setOtpBusy(true);
-    setOtpError(null);
-    try {
-      await api("/api/otp/verify", { method: "POST", body: JSON.stringify({ phone, code: otpCode.trim() }) });
-      setVerifiedPhone(normalisePhone(phone));
-      setOtpNotice(null);
-      setOtpCode("");
-    } catch (err) {
-      setOtpError(errorMessage(err));
-    } finally {
-      setOtpBusy(false);
-    }
   }
 
   async function uploadScreenshot(chosen: File) {
@@ -1373,14 +1329,7 @@ export function BookingFlow({
                     inputMode="numeric"
                     autoComplete="tel"
                     value={phone}
-                    onChange={(e) => {
-                      setPhone(e.target.value);
-                      // Editing a digit means the verified number is no longer the
-                      // one being booked with, so the proof stops counting.
-                      setOtpSent(false);
-                      setOtpError(null);
-                      setOtpNotice(null);
-                    }}
+                    onChange={(e) => setPhone(e.target.value)}
                     placeholder="10-digit mobile number"
                     required
                     aria-invalid={phoneProblem && phone.length > 0 ? true : undefined}
@@ -1401,60 +1350,31 @@ export function BookingFlow({
                       <ShieldCheck className="h-4 w-4" aria-hidden="true" />
                       {normalisePhone(phone)} verified
                     </p>
-                  ) : (
+                  ) : otpWidget ? (
                     <>
                       <p className="text-sm font-medium text-white">Verify your mobile number</p>
-                      <p className="mt-1 text-xs text-ink-400">
-                        We send a 6-digit code so we can reach you about this booking.
+                      <p className="mb-3 mt-1 text-xs text-ink-400">
+                        So we can reach you about this booking.
                       </p>
-
-                      {!otpSent ? (
-                        <Button
-                          variant="secondary"
-                          className="mt-3"
-                          disabled={!phoneLooksValid(phone) || otpBusy}
-                          onClick={sendCode}
-                        >
-                          {otpBusy ? <Spinner /> : null}
-                          Send code
-                        </Button>
-                      ) : (
-                        <div className="mt-3 flex flex-wrap items-end gap-2">
-                          <div className="w-40">
-                            <label className="field-label" htmlFor="otp-code">
-                              6-digit code
-                            </label>
-                            <input
-                              id="otp-code"
-                              className="field-input tracking-[0.3em]"
-                              inputMode="numeric"
-                              autoComplete="one-time-code"
-                              maxLength={6}
-                              value={otpCode}
-                              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
-                            />
-                          </div>
-                          <Button disabled={otpCode.length !== 6 || otpBusy} onClick={checkCode}>
-                            {otpBusy ? <Spinner /> : null}
-                            Verify
-                          </Button>
-                          <Button variant="ghost" disabled={resendIn > 0 || otpBusy} onClick={sendCode}>
-                            {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
-                          </Button>
-                        </div>
-                      )}
-
-                      {otpNotice ? (
-                        <Alert tone="info" className="mt-3">
-                          {otpNotice}
-                        </Alert>
-                      ) : null}
-                      {otpError ? (
-                        <Alert tone="error" className="mt-3">
-                          {otpError}
-                        </Alert>
-                      ) : null}
+                      <Msg91OtpWidget
+                        widgetId={otpWidget.widgetId}
+                        tokenAuth={otpWidget.tokenAuth}
+                        phone={phone}
+                        onVerified={setVerifiedPhone}
+                      />
                     </>
+                  ) : (
+                    /*
+                     * Verification is on but there is nothing to verify with. Said
+                     * plainly rather than shown as a broken code box: the booking
+                     * would be refused by the server anyway, and a customer who
+                     * rings up is a better outcome than one who gives up at a form
+                     * that never works.
+                     */
+                    <Alert tone="error">
+                      Mobile verification is unavailable right now. Please call us and we will take your booking over
+                      the phone.
+                    </Alert>
                   )}
                 </div>
               ) : null}
