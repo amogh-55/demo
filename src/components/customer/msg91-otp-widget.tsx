@@ -401,7 +401,7 @@ export function Msg91OtpWidget({ widgetId, tokenAuth, phone: given, onVerified }
               disabled={busy || resendIn > 0}
               onClick={resend}
             >
-              {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
+              {resendIn > 0 ? `Send again in ${resendIn}s` : "Didn't get it? Send again"}
             </button>
             {controlled ? null : (
               <button
