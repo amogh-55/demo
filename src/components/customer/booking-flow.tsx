@@ -200,11 +200,12 @@ export function BookingFlow({
   const [verifiedPhone, setVerifiedPhone] = React.useState<string | null>(null);
 
   /**
-   * Whether the customer took the advance. Defaults to true wherever one is
-   * offered, because a ground that offers half now is trying to make booking
-   * easy, and the cheaper option should not be the one you have to find.
+   * Whether the customer took the advance. Defaults to paying in full: the
+   * owner would rather have the whole amount, and a customer who wants to pay
+   * half will look for it. Nudging everyone onto the advance leaves money to
+   * collect at the gate that would otherwise already be in the account.
    */
-  const [payAdvance, setPayAdvance] = React.useState(true);
+  const [payAdvance, setPayAdvance] = React.useState(false);
   /** What the customer is being asked for right now: the advance, or everything. */
   const dueNow = hold && payAdvance && hold.advanceAmount > 0 ? hold.advanceAmount : (hold?.amount ?? 0);
 

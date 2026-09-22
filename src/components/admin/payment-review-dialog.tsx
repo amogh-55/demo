@@ -33,6 +33,8 @@ export interface PaymentReviewBooking {
   reference: string;
   customerName: string;
   amount: number;
+  /** What the customer agreed to pay online. Below `amount` on an advance booking. */
+  amountDueNow: number;
   amountPaid: number;
   amountRemaining: number;
   /** A booking taken over the phone is already CONFIRMED and still owes its money. */
@@ -80,8 +82,15 @@ export function PaymentReviewDialog({
 
   React.useEffect(() => {
     if (!open || !booking) return;
-    // Pre-fill with what is still owed: the common case is a payment in full.
-    setAmount(String(booking.amountRemaining || booking.amount));
+    /*
+     * Pre-fill with what this payment is expected to be, which on a first
+     * payment is what the customer was actually asked for. Filling in the whole
+     * ₹700 on a booking where ₹350 was agreed invites the owner to press the
+     * button without reading it, and record money that never arrived.
+     */
+    const due = Math.min(booking.amountDueNow || booking.amount, booking.amount);
+    const expected = booking.amountPaid > 0 ? booking.amountRemaining : Math.max(0, due - booking.amountPaid);
+    setAmount(String(expected || booking.amountRemaining || booking.amount));
     setNote("");
     setManualUtr("");
     setMode("ACCEPT");
@@ -102,7 +111,15 @@ export function PaymentReviewDialog({
    * accepting the booking are one intent. An underpaid booking still cannot be
    * accepted, so the flag is false and the button stays a plain "Record payment".
    */
-  const settlesInFull = mode === "ACCEPT" && amountValid && projectedRemaining <= 0;
+  /** Below `amount`: this customer agreed to pay part now and the rest on arrival. */
+  const onAdvance = booking.amountDueNow < booking.amount;
+  /**
+   * Whether this payment meets what was agreed, which is what decides the slot.
+   * On an advance booking that is the advance, not the total — the balance is
+   * collected at the gate and must not hold the booking up.
+   */
+  const clearsWhatIsDue = mode === "ACCEPT" && amountValid && projectedPaid >= booking.amountDueNow;
+  const stillAtGround = Math.max(0, booking.amount - projectedPaid);
   /** Already accepted — a phone booking, or a session paid for at the gate. */
   const alreadyConfirmed = booking.status === "CONFIRMED";
 
@@ -234,11 +251,17 @@ export function PaymentReviewDialog({
               </div>
 
               {amountValid ? (
-                <Alert tone={projectedRemaining > 0 ? "warning" : "success"} className="mt-3">
-                  {projectedRemaining > 0 ? (
+                <Alert tone={clearsWhatIsDue ? "success" : "warning"} className="mt-3">
+                  {!clearsWhatIsDue ? (
                     <>
-                      Still short by <strong>{formatCurrency(projectedRemaining)}</strong>. The booking stays pending and{" "}
+                      Still short by <strong>{formatCurrency(booking.amountDueNow - projectedPaid)}</strong> of the{" "}
+                      {formatCurrency(booking.amountDueNow)} due. The booking stays pending and{" "}
                       <strong>keeps its slots</strong>.
+                    </>
+                  ) : onAdvance && stillAtGround > 0 ? (
+                    <>
+                      That is the agreed advance — <strong>{formatCurrency(stillAtGround)}</strong> is collected at the
+                      ground.
                     </>
                   ) : (
                     <>
@@ -317,11 +340,24 @@ export function PaymentReviewDialog({
                   <p className="mt-1.5 text-xs text-ink-500">Read it off the screenshot — not what the customer says.</p>
 
                   {amountValid ? (
-                    <Alert tone={projectedRemaining > 0 ? "warning" : "success"} className="mt-3">
-                      {projectedRemaining > 0 ? (
+                    <Alert tone={clearsWhatIsDue ? "success" : "warning"} className="mt-3">
+                      {!clearsWhatIsDue ? (
                         <>
-                          Still short by <strong>{formatCurrency(projectedRemaining)}</strong>. The booking{" "}
-                          <strong>keeps its slots</strong> either way — you can ask for the balance on WhatsApp.
+                          Still short by <strong>{formatCurrency(booking.amountDueNow - projectedPaid)}</strong> of the{" "}
+                          {formatCurrency(booking.amountDueNow)} due. The booking <strong>keeps its slots</strong> either
+                          way — you can ask for the balance on WhatsApp.
+                        </>
+                      ) : onAdvance && stillAtGround > 0 ? (
+                        <>
+                          That is the agreed advance.{" "}
+                          {alreadyConfirmed ? (
+                            "The booking is already confirmed."
+                          ) : (
+                            <>
+                              Recording it <strong>accepts the booking</strong> in the same step.
+                            </>
+                          )}{" "}
+                          <strong>{formatCurrency(stillAtGround)}</strong> is collected at the ground.
                         </>
                       ) : (
                         <>
@@ -384,10 +420,10 @@ export function PaymentReviewDialog({
                 disabled={
                   busy || !amountValid || note.trim().length < 3 || (manualUtr !== "" && manualUtrDigits.length !== 12)
                 }
-                onClick={() => onRecord(parsed, note.trim(), settlesInFull, manualUtrDigits.length === 12 ? manualUtrDigits : null)}
+                onClick={() => onRecord(parsed, note.trim(), clearsWhatIsDue, manualUtrDigits.length === 12 ? manualUtrDigits : null)}
               >
                 {busy ? <Spinner /> : null}
-                {busy ? "Saving…" : settlesInFull ? "Record & accept booking" : `Record ${amountValid ? formatCurrency(parsed) : "payment"}`}
+                {busy ? "Saving…" : clearsWhatIsDue && !alreadyConfirmed ? "Record & accept booking" : `Record ${amountValid ? formatCurrency(parsed) : "payment"}`}
               </Button>
             ) : (
               <Button
@@ -396,7 +432,7 @@ export function PaymentReviewDialog({
                 disabled={busy || (mode === "ACCEPT" ? !amountValid : note.trim().length < 3)}
                 onClick={() =>
                   mode === "ACCEPT"
-                    ? onAccept(pending.id, parsed, note.trim() || undefined, settlesInFull)
+                    ? onAccept(pending.id, parsed, note.trim() || undefined, clearsWhatIsDue)
                     : onReject(pending.id, note.trim())
                 }
               >
@@ -405,9 +441,9 @@ export function PaymentReviewDialog({
                   ? "Saving…"
                   : mode === "REJECT"
                     ? "Mark not valid"
-                    : settlesInFull
+                    : clearsWhatIsDue && !alreadyConfirmed
                       ? "Record & accept booking"
-                      : "Record payment"}
+                      : `Record ${amountValid ? formatCurrency(parsed) : "payment"}`}
               </Button>
             )}
           </div>

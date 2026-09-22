@@ -237,8 +237,7 @@ export default async function BookingSuccessPage() {
         </div>
 
         <Alert tone="info" className="no-print mt-4">
-          Tip: <strong>Download receipt</strong> opens your print dialog — choose <strong>Save as PDF</strong> there to
-          keep a copy on your phone.
+          Tip: <strong>Download receipt</strong> saves a PDF to your phone. Keep it — it has your booking reference.
         </Alert>
       </main>
     </div>

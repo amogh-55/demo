@@ -1377,6 +1377,14 @@ export async function recordManualPayment(input: {
         { status: "PENDING" },
         { status: "CONFIRMED", payAtVenue: true },
         { status: "CONFIRMED", createdBy: { $ne: null } },
+        /**
+         * The third way money arrives after a booking is confirmed: it was taken
+         * on an advance, the slot is already the customer's, and the balance is
+         * handed over at the gate. Written as "confirmed and still owing" rather
+         * than as another special case, because that is the actual rule the two
+         * clauses above are each an instance of.
+         */
+        { status: "CONFIRMED", $expr: { $gt: ["$amount", { $ifNull: ["$amountPaid", 0] }] } },
       ],
       // Same spam ceiling as customer uploads.
       $expr: { $lt: [{ $size: { $ifNull: ["$payments", []] } }, 10] },
@@ -1523,13 +1531,21 @@ export async function confirmBooking(bookingId: ObjectId, admin: { username: str
       throw appError("CONFLICT", `This booking is ${booking.status.toLowerCase()} and can no longer be confirmed.`);
     }
     const paid = booking.amountPaid ?? 0;
-    if (booking.paymentVerificationStatus !== "VERIFIED" || paid < booking.amount) {
-      const short = booking.amount - paid;
+    /*
+     * What had to arrive before the slot is the customer's. For most bookings
+     * that is the whole amount. For one taken on an advance it is the advance —
+     * the balance is collected at the ground, and holding the slot hostage for
+     * money the owner agreed to take later would make the option pointless.
+     *
+     * Read off the booking, where the server wrote it when the booking was made,
+     * never off the request.
+     */
+    const dueNow = booking.amountDueNow ?? booking.amount;
+    if (paid < dueNow) {
+      const short = dueNow - paid;
       throw appError(
         "CONFLICT",
-        short > 0
-          ? `₹${short.toLocaleString("en-IN")} is still outstanding. Record the balance payment before confirming.`
-          : "Verify the payment before confirming this booking.",
+        `₹${short.toLocaleString("en-IN")} of the amount due is still outstanding. Record it before confirming.`,
       );
     }
 

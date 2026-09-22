@@ -51,7 +51,11 @@ interface ListResponse {
   total: number;
 }
 
-type PendingAction = { kind: "CONFIRM"; booking: AdminBooking } | { kind: "REJECT"; booking: AdminBooking };
+type PendingAction =
+  | { kind: "CONFIRM"; booking: AdminBooking }
+  | { kind: "REJECT"; booking: AdminBooking }
+  /** The balance an advance customer hands over on arrival. One press, one confirm. */
+  | { kind: "SETTLE_BALANCE"; booking: AdminBooking };
 
 /**
  * Deliberately no payment-related reasons here. Releasing the slots is for a
@@ -136,6 +140,22 @@ export function BookingsManager({
     setBusyId(action.booking.id);
     setActionError(null);
     try {
+      if (action.kind === "SETTLE_BALANCE") {
+        // The amount is the booking's own outstanding figure, not anything typed.
+        await api(`/api/admin/bookings/${action.booking.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            action: "RECORD_PAYMENT",
+            amount: action.booking.amountRemaining,
+            note: "Balance collected at the ground",
+          }),
+        });
+        setPending(null);
+        setNotice(`Booking ${action.booking.reference} is now paid in full.`);
+        await load();
+        return;
+      }
+
       const body = action.kind === "REJECT" ? { action: "REJECT", reason } : { action: "CONFIRM" };
       await api(`/api/admin/bookings/${action.booking.id}`, { method: "PATCH", body: JSON.stringify(body) });
       setPending(null);
@@ -170,9 +190,18 @@ export function BookingsManager({
         body: JSON.stringify(body),
       });
       const remaining = result.booking.amountRemaining;
+      /*
+       * What had to arrive for the slot to be the customer's. On an advance
+       * booking that is the advance — waiting for the balance would leave a
+       * booking the owner has agreed to take sitting as "pending" until the
+       * customer turns up, which is the wrong way round.
+       */
+      const due = result.booking.amountDueNow;
+      const settled = result.booking.amountPaid >= due;
+      const atGround = Math.max(0, result.booking.amount - result.booking.amountPaid);
 
       let confirmed = false;
-      if (thenConfirm && remaining <= 0) {
+      if (thenConfirm && settled) {
         await api(`/api/admin/bookings/${booking.id}`, {
           method: "PATCH",
           body: JSON.stringify({ action: "CONFIRM" }),
@@ -181,11 +210,13 @@ export function BookingsManager({
       }
 
       setNotice(
-        remaining > 0
-          ? `${booking.reference}: ${formatCurrency(remaining)} still outstanding. The slots are still reserved.`
-          : confirmed
-            ? `${booking.reference}: paid in full and confirmed.`
-            : `${booking.reference}: paid in full. You can confirm the booking now.`,
+        !settled
+          ? `${booking.reference}: ${formatCurrency(due - result.booking.amountPaid)} of the amount due is still outstanding. The slots are still reserved.`
+          : remaining > 0
+            ? `${booking.reference}: advance received${confirmed ? " and booking confirmed" : ""}. ${formatCurrency(atGround)} to collect at the ground.`
+            : confirmed
+              ? `${booking.reference}: paid in full and confirmed.`
+              : `${booking.reference}: paid in full. You can confirm the booking now.`,
       );
       setReviewing(null);
       await load();
@@ -456,6 +487,28 @@ export function BookingsManager({
       />
 
       <ConfirmDialog
+        open={pending?.kind === "SETTLE_BALANCE"}
+        onOpenChange={() => setPending(null)}
+        title="Collect the rest of the payment?"
+        description={
+          pending ? (
+            <>
+              {pending.booking.customerName} paid {formatCurrency(pending.booking.amountPaid)} online and owes{" "}
+              <strong>{formatCurrency(pending.booking.amountRemaining)}</strong> at the ground.
+              <br />
+              <br />
+              Only press this once the money is actually in your hand. It records the balance and marks the booking{" "}
+              <strong>paid in full</strong>.
+            </>
+          ) : null
+        }
+        confirmLabel={pending ? `Record ${formatCurrency(pending.booking.amountRemaining)}` : "Record balance"}
+        busy={busyId !== null}
+        error={actionError}
+        onConfirm={() => pending && void runAction(pending, "")}
+      />
+
+      <ConfirmDialog
         open={pending?.kind === "REJECT"}
         onOpenChange={() => setPending(null)}
         title="Reject and release the slots?"
@@ -515,6 +568,13 @@ function BookingCard({
    * collected at the gate.
    */
   const onAdvance = booking.amountDueNow < booking.amount;
+  /**
+   * Whether the money that had to arrive online actually has. An advance
+   * customer who pays less than the advance is genuinely short — of the advance,
+   * not of the total — and the two numbers are different enough to matter.
+   */
+  const metWhatWasDue = booking.amountPaid >= booking.amountDueNow;
+  const shortOfDue = Math.max(0, booking.amountDueNow - booking.amountPaid);
 
   /**
    * Whether the server would accept a payment against this booking — the same
@@ -595,7 +655,9 @@ function BookingCard({
                 {owes ? (
                   <span className="text-ink-500">
                     {" · "}
-                    {formatCurrency(booking.amountRemaining)} {onAdvance ? "at the ground" : "due"}
+                    {onAdvance && metWhatWasDue
+                      ? `${formatCurrency(booking.amountRemaining)} at the ground`
+                      : `${formatCurrency(shortOfDue)} due`}
                   </span>
                 ) : null}
               </span>
@@ -643,9 +705,20 @@ function BookingCard({
         </p>
       ) : null}
 
-      {takesPayment && booking.amountPaid > 0 ? (
+      {/* "Short by" is for money that was expected and did not arrive. An advance
+          balance was never expected online, so calling it short reads as a problem
+          when it is the arrangement working as intended. */}
+      {booking.amountRemaining > 0 && onAdvance && metWhatWasDue ? (
+        <p className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-900">
+          Advance paid. {formatCurrency(booking.amountRemaining)} to collect at the ground.
+        </p>
+      ) : takesPayment && booking.amountPaid > 0 ? (
         <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
-          Short by {formatCurrency(booking.amountRemaining)}
+          {/* Short of what was actually asked for. On an advance booking that is
+              the advance — saying they are ₹400 short when ₹100 would settle it
+              sends staff chasing money nobody agreed to pay yet. */}
+          Short by {formatCurrency(shortOfDue)}
+          {onAdvance ? ` of the ${formatCurrency(booking.amountDueNow)} due now` : ""}
           {isPending ? " — the slots are still reserved for this customer." : "."}
         </p>
       ) : null}
@@ -708,7 +781,14 @@ function BookingCard({
           </Button>
         ) : null}
 
-        {takesPayment && booking.amountPaid > 0 ? (
+        {/* An advance balance is collected at the gate, so the useful button records
+            it. A genuine shortfall is chased on WhatsApp instead — different money,
+            different action. */}
+        {booking.amountRemaining > 0 && onAdvance && metWhatWasDue ? (
+          <Button size="sm" className="h-11 sm:h-9" onClick={() => onAction("SETTLE_BALANCE")} disabled={busy}>
+            Record {formatCurrency(booking.amountRemaining)}
+          </Button>
+        ) : takesPayment && booking.amountPaid > 0 ? (
           <Button size="sm" variant="whatsapp" className="h-11 sm:h-9" onClick={() => onWhatsapp("BALANCE")} disabled={busy}>
             Ask for {formatCurrency(booking.amountRemaining)}
           </Button>
