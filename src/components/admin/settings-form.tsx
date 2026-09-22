@@ -97,7 +97,7 @@ export function SettingsForm({ initial, smsReady }: { initial: Settings; smsRead
         <div className="mt-4 space-y-3">
           <Toggle
             label="Ask customers to verify their mobile number"
-            hint="Customers get a 6-digit code before they can book. Catches mistyped numbers, so you can always reach them."
+            hint="Customers get a 4-digit code before they can book. Catches mistyped numbers, so you can always reach them."
             checked={form.otpEnabled}
             onChange={(otpEnabled) => set({ otpEnabled })}
           />
