@@ -186,6 +186,17 @@ export interface FacilityConfig {
    * Zero means every session must pay online.
    */
   payAtVenueMaxOvers: number;
+  /**
+   * What share of the total a customer may pay online to hold the booking,
+   * settling the rest at the ground. 0 means the full amount is due up front,
+   * which is what every facility did before this existed.
+   *
+   * A percentage rather than a fixed figure because the owner thinks in halves:
+   * "half now, half at the ground" holds whether the pitch is ₹700 or ₹1,200.
+   * The rupee amount is always computed server-side from the booking's own total,
+   * so a client cannot decide what it owes.
+   */
+  advancePercent?: number;
   /** OVERS only. Empty for HOURLY facilities. */
   ballTypes: BallType[];
 }
@@ -329,6 +340,13 @@ export interface BookingDoc {
   payments: PaymentAttempt[];
   /** Sum of the accepted attempts. Derived server-side, never sent by a browser. */
   amountPaid: number;
+  /**
+   * What this customer was asked to pay online, which is `amount` unless they
+   * took the advance option. Recorded so the owner can tell an agreed half
+   * payment from someone who simply paid too little — both leave the booking
+   * PARTIAL, and only this says which one happened.
+   */
+  amountDueNow?: number;
   /** The most recent screenshot, kept for quick access. */
   paymentScreenshotKey: string | null;
   paymentUploadedAt: Date | null;
@@ -348,17 +366,6 @@ export interface AdminUserDoc {
   active: boolean;
   createdAt: Date;
   lastLoginAt: Date | null;
-}
-
-export interface AuditLogDoc {
-  _id: ObjectId;
-  adminId: string;
-  adminUsername: string;
-  action: string;
-  entityType: string;
-  entityId: string;
-  metadata: Record<string, unknown>;
-  createdAt: Date;
 }
 
 export interface SettingsDoc {

@@ -44,6 +44,7 @@ interface FacilityConfig {
   holdMinutes: number;
   oversPerSlot: number;
   payAtVenueMaxOvers: number;
+  advancePercent?: number;
   ballTypes: BallType[];
 }
 
@@ -192,6 +193,10 @@ function scheduleProblems(config: FacilityConfig, kind: "HOURLY" | "OVERS"): Pro
     p.closeMin = `Opening hours must divide into whole ${config.slotMinutes}-minute slots.`;
   }
 
+  const advance = config.advancePercent ?? 0;
+  if (!Number.isInteger(advance) || advance < 0 || advance > 99) {
+    p.advancePercent = "Enter a percentage between 0 and 99. Use 0 to take the full amount up front.";
+  }
   if (!Number.isInteger(config.bookingWindowDays) || config.bookingWindowDays < 0 || config.bookingWindowDays > 365) {
     p.bookingWindowDays = "Enter a number of days between 0 and 365.";
   }
@@ -827,6 +832,28 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
           {problems.bookingWindowDays ? (
             <FieldError id="window-days-error">{problems.bookingWindowDays}</FieldError>
           ) : null}
+        </div>
+
+        <div>
+          <label className="field-label" htmlFor="advance-percent">
+            Pay now to book (%)
+          </label>
+          <PriceInput
+            id="advance-percent"
+            min={0}
+            max={99}
+            value={config.advancePercent ?? 0}
+            invalid={Boolean(problems.advancePercent)}
+            describedBy={problems.advancePercent ? "advance-percent-error" : undefined}
+            onChange={(advancePercent) => update({ advancePercent })}
+          />
+          {problems.advancePercent ? (
+            <FieldError id="advance-percent-error">{problems.advancePercent}</FieldError>
+          ) : null}
+          <p className="mt-1.5 text-xs text-ink-500">
+            Customers may pay this share online and the rest at the ground — set 50 for half now, half on arrival. Leave
+            at 0 to take the full amount before confirming.
+          </p>
         </div>
       </div>
 

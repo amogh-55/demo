@@ -27,6 +27,7 @@ function publicHold(hold: HoldResult | HoldSnapshot) {
     // travel with the hold rather than being worked out again in the browser.
     payAtVenue: hold.payAtVenue,
     amount: hold.amount,
+    advanceAmount: hold.advanceAmount,
     breakdown: hold.breakdown,
   };
 }

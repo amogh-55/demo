@@ -61,6 +61,13 @@ export default async function BookingSuccessPage() {
   const rejected = booking.status === "REJECTED";
   /** What is still to hand over at the ground. Zero once a payment is verified in full. */
   const owed = Math.max(0, booking.amount - booking.amountPaid);
+  /**
+   * The customer paid part online on purpose. Until an admin verifies it nothing
+   * is "received" yet, so the balance cannot be read off amountPaid — this is the
+   * only record of the arrangement they actually made.
+   */
+  const dueNow = booking.amountDueNow ?? booking.amount;
+  const balanceAtGround = Math.max(0, booking.amount - dueNow);
 
   return (
     <div className="min-h-dvh bg-ink-950">
@@ -99,6 +106,12 @@ export default async function BookingSuccessPage() {
             <Row label="Time" value={formatRange(booking.startMin, booking.endMin)} />
             <Row label="Duration" value={minutesToDuration(booking.endMin - booking.startMin)} />
             <Row label="Booking total" value={formatCurrency(booking.amount)} strong />
+            {balanceAtGround > 0 ? (
+              <>
+                <Row label="Paid online" value={formatCurrency(dueNow)} />
+                <Row label="To pay at the ground" value={formatCurrency(balanceAtGround)} strong />
+              </>
+            ) : null}
             {booking.amountPaid > 0 ? <Row label="Received so far" value={formatCurrency(booking.amountPaid)} /> : null}
             <Row label="Name" value={booking.customerName} />
             <Row label="Mobile" value={`+91 ${booking.customerPhone}`} />
@@ -176,6 +189,12 @@ export default async function BookingSuccessPage() {
                 <li>
                   <strong>2.</strong> Once the payment is verified, we message you on WhatsApp to confirm your slot.
                 </li>
+                {balanceAtGround > 0 ? (
+                  <li>
+                    <strong>3.</strong> Bring {formatCurrency(balanceAtGround)} to the ground — that is the rest of the
+                    booking.
+                  </li>
+                ) : null}
               </ol>
               <p className="mt-3 border-t border-amber-200 pt-2 text-amber-100">
                 Your slot is held for you while we check. <strong>This is not a confirmation yet</strong> — it becomes

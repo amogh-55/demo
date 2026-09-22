@@ -91,6 +91,8 @@ interface HoldResponse {
   ballTypeName: string | null;
   payAtVenue: boolean;
   amount: number;
+  /** What may be paid now to hold this booking, or 0 when the full amount is due. */
+  advanceAmount: number;
   breakdown: Array<{ startMin: number; endMin: number; price: number }>;
 }
 
@@ -196,6 +198,15 @@ export function BookingFlow({
 
   /** The exact number that was verified, so editing a digit invalidates it. */
   const [verifiedPhone, setVerifiedPhone] = React.useState<string | null>(null);
+
+  /**
+   * Whether the customer took the advance. Defaults to true wherever one is
+   * offered, because a ground that offers half now is trying to make booking
+   * easy, and the cheaper option should not be the one you have to find.
+   */
+  const [payAdvance, setPayAdvance] = React.useState(true);
+  /** What the customer is being asked for right now: the advance, or everything. */
+  const dueNow = hold && payAdvance && hold.advanceAmount > 0 ? hold.advanceAmount : (hold?.amount ?? 0);
 
   const [file, setFile] = React.useState<File | null>(null);
   const [preview, setPreview] = React.useState<string | null>(null);
@@ -643,6 +654,7 @@ export function BookingFlow({
           customerPhone: phone,
           paymentScreenshotKey: screenshotKey,
           utr: hold?.payAtVenue ? null : utrDigits,
+          payAdvance,
         }),
       });
       router.push("/booking/success");
@@ -1436,9 +1448,31 @@ export function BookingFlow({
 
           {step === "payment" && !hold.payAtVenue ? (
             <>
+              {hold.advanceAmount > 0 ? (
+                <section className="card" aria-labelledby="advance-heading">
+                  <h2 id="advance-heading" className="text-lg font-semibold text-white">
+                    How much would you like to pay now?
+                  </h2>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <PayChoice
+                      selected={payAdvance}
+                      onSelect={() => setPayAdvance(true)}
+                      title={`Pay ${formatCurrency(hold.advanceAmount)} now`}
+                      detail={`${formatCurrency(hold.amount - hold.advanceAmount)} at the ground`}
+                    />
+                    <PayChoice
+                      selected={!payAdvance}
+                      onSelect={() => setPayAdvance(false)}
+                      title={`Pay ${formatCurrency(hold.amount)} now`}
+                      detail="Nothing left to pay"
+                    />
+                  </div>
+                </section>
+              ) : null}
+
               <section className="card" aria-labelledby="payment-heading">
                 <h2 id="payment-heading" className="text-lg font-semibold text-white">
-                  Pay {formatCurrency(hold.amount)} by UPI
+                  Pay {formatCurrency(dueNow)} by UPI
                 </h2>
                 <p className="mt-1 text-sm text-ink-400">
                   Pay using any UPI app, then enter the UTR number from your payment below.
@@ -1494,7 +1528,12 @@ export function BookingFlow({
                     </div>
                     <div>
                       <dt className="text-ink-400">Amount to pay</dt>
-                      <dd className="mt-1 text-lg font-bold text-white">{formatCurrency(hold.amount)}</dd>
+                      <dd className="mt-1 text-lg font-bold text-white">{formatCurrency(dueNow)}</dd>
+                      {dueNow < hold.amount ? (
+                        <dd className="mt-0.5 text-xs text-ink-400">
+                          {formatCurrency(hold.amount - dueNow)} of {formatCurrency(hold.amount)} at the ground
+                        </dd>
+                      ) : null}
                     </div>
                   </dl>
                 </div>
@@ -1645,7 +1684,12 @@ export function BookingFlow({
                     label="Screenshot"
                     value={screenshotKey ? "Uploaded" : storageIsDown ? "Will be checked by hand" : "Not uploaded"}
                   />
-                  <Row label="Amount paid" value={formatCurrency(hold.amount)} strong />
+                  {/* What they are paying right now, not the booking total — an advance
+                      customer paying ₹350 was being shown "Amount paid ₹700". */}
+                  <Row label="Paying now" value={formatCurrency(dueNow)} strong />
+                  {dueNow < hold.amount ? (
+                    <Row label="At the ground" value={formatCurrency(hold.amount - dueNow)} />
+                  ) : null}
                 </dl>
 
                 <Alert tone="info" className="mt-4">
@@ -1702,6 +1746,34 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
         {value}
       </dd>
     </div>
+  );
+}
+
+/** One of the two "how much now" cards. Radio behaviour, but big enough for a thumb. */
+function PayChoice({
+  selected,
+  onSelect,
+  title,
+  detail,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={cn(
+        "rounded-lg border px-4 py-3 text-left transition-colors",
+        selected ? "border-lime-400 bg-lime-400/10" : "border-white/15 bg-white/[0.03] hover:bg-white/[0.06]",
+      )}
+    >
+      <span className="block text-base font-semibold text-white">{title}</span>
+      <span className="mt-0.5 block text-sm text-ink-400">{detail}</span>
+    </button>
   );
 }
 

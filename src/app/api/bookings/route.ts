@@ -48,6 +48,7 @@ export async function POST(request: Request) {
       customerPhone: input.customerPhone,
       paymentScreenshotKey: input.paymentScreenshotKey,
       utr: input.utr,
+      payAdvance: input.payAdvance,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,
       /*
@@ -95,6 +96,7 @@ export async function POST(request: Request) {
       overs: booking.overs,
       ballTypeName: booking.ballTypeName,
       amount: booking.amount,
+      amountDueNow: booking.amountDueNow ?? booking.amount,
       customerPhone: booking.customerPhone,
     });
   } catch (err) {

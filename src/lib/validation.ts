@@ -103,6 +103,12 @@ export const bookingSubmitSchema = z.object({
    * the hold, so omitting it never makes a booking free.
    */
   utr: utrSchema.nullish().transform((v) => v ?? null),
+  /**
+   * The customer pressed "pay the advance" rather than "pay in full". A choice,
+   * not an amount — the rupee figure is computed server-side from the facility's
+   * configuration, so this cannot be used to decide what is owed.
+   */
+  payAdvance: z.boolean().optional(),
 });
 
 /**
@@ -362,6 +368,12 @@ export const facilityConfigSchema = z
     oversPerSlot: z.number().int().min(0).max(100).default(0),
     /** OVERS only: the largest session that skips online payment. 0 = never skip. */
     payAtVenueMaxOvers: z.number().int().min(0).max(10_000).default(0),
+    /**
+     * Share of the total a customer may pay online to hold the booking, settling
+     * the rest at the ground. 0 means the whole amount is due up front. Capped
+     * below 100 because "an advance of everything" is just paying in full.
+     */
+    advancePercent: z.number().int().min(0).max(99).default(0),
     ballTypes: z.array(ballTypeSchema).default([]),
   })
   .refine((c) => c.closeMin > c.openMin, { message: "Closing time must be after opening time", path: ["closeMin"] })

@@ -99,6 +99,9 @@ function serialiseForList(b: BookingDoc) {
     startMin: b.startMin,
     endMin: b.endMin,
     amount: b.amount,
+    // What this customer agreed to pay online. Less than `amount` means they took
+    // the advance, which is why a part payment on it is not a shortfall to chase.
+    amountDueNow: b.amountDueNow ?? b.amount,
     customerName: b.customerName,
     customerPhone: b.customerPhone,
     status: b.status,

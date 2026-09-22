@@ -34,6 +34,8 @@ interface AdminBooking {
   paymentVerificationStatus: string;
   amountPaid: number;
   amountRemaining: number;
+  /** What the customer agreed to pay online. Below `amount` means they took the advance. */
+  amountDueNow: number;
   payments: PaymentAttemptView[];
   /** UPLOADED, FAILED (our storage refused a valid image) or NONE. */
   screenshotUploadStatus: "UPLOADED" | "FAILED" | "NONE";
@@ -506,6 +508,13 @@ function BookingCard({
   // Confirming needs the money to actually add up, not just a verified flag.
   const paidInFull = booking.paymentVerificationStatus === "VERIFIED" && booking.amountRemaining <= 0;
   const owes = booking.amountRemaining > 0;
+  /*
+   * The customer chose to pay part now and the rest at the ground. Worth saying
+   * out loud: otherwise a ₹350 payment against a ₹700 pitch reads as someone who
+   * paid too little, and staff chase a balance that was always going to be
+   * collected at the gate.
+   */
+  const onAdvance = booking.amountDueNow < booking.amount;
 
   /**
    * Whether the server would accept a payment against this booking — the same
@@ -583,11 +592,18 @@ function BookingCard({
             {booking.amountPaid > 0 ? (
               <span className={paidInFull ? "text-green-700" : "text-amber-700"}>
                 {formatCurrency(booking.amountPaid)} received
-                {owes ? <span className="text-ink-500"> · {formatCurrency(booking.amountRemaining)} due</span> : null}
+                {owes ? (
+                  <span className="text-ink-500">
+                    {" · "}
+                    {formatCurrency(booking.amountRemaining)} {onAdvance ? "at the ground" : "due"}
+                  </span>
+                ) : null}
               </span>
             ) : booking.payAtVenue || booking.createdBy ? (
               // Not a payment to chase: this one was always going to be paid at the gate.
               <span className="text-amber-700">collect at the ground</span>
+            ) : onAdvance ? (
+              <span className="text-amber-700">advance {formatCurrency(booking.amountDueNow)} expected</span>
             ) : (
               <span className="font-normal text-ink-500">nothing received</span>
             )}
