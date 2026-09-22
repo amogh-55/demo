@@ -51,6 +51,17 @@ export default async function BookingSuccessPage() {
 
   const location = await collections.locations(await getDb()).findOne({ _id: booking.locationId });
 
+  /*
+   * The page used to assume every booking was waiting on a payment check. It is
+   * kept for a week in a cookie, so the customer opens it again long after that
+   * stopped being true — and a short overs session is never true, because it is
+   * confirmed the moment it is booked with nothing paid online at all.
+   */
+  const confirmed = booking.status === "CONFIRMED";
+  const rejected = booking.status === "REJECTED";
+  /** What is still to hand over at the ground. Zero once a payment is verified in full. */
+  const owed = Math.max(0, booking.amount - booking.amountPaid);
+
   return (
     <div className="min-h-dvh bg-ink-950">
       <main id="main" className="container max-w-xl py-10 sm:py-16">
@@ -58,13 +69,21 @@ export default async function BookingSuccessPage() {
           {/* Only appears on the printed copy, so the page itself stays uncluttered. */}
           <div className="print-only mb-4 border-b border-white/15 pb-3">
             <p className="text-lg font-bold">{settings.businessName}</p>
-            <p className="text-sm">Booking request — awaiting payment verification</p>
+            <p className="text-sm">
+              {confirmed
+                ? owed > 0
+                  ? "Booking confirmed — pay at the ground"
+                  : "Booking confirmed — paid"
+                : "Booking request — awaiting payment verification"}
+            </p>
             <p className="mt-1 text-xs">Issued {formatIstTimestamp(booking.createdAt)} IST</p>
           </div>
 
           <div className="text-center">
             <CheckCircle2 className="no-print mx-auto h-12 w-12 text-lime-400" aria-hidden="true" />
-            <h1 className="mt-3 text-2xl font-bold text-white">Booking request submitted</h1>
+            <h1 className="mt-3 text-2xl font-bold text-white">
+              {confirmed ? "Booking confirmed" : "Booking request submitted"}
+            </h1>
 
             <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-ink-400">Booking reference</p>
             <p className="mt-1 break-words text-2xl font-bold tracking-wider text-lime-400 sm:text-3xl">
@@ -83,13 +102,22 @@ export default async function BookingSuccessPage() {
             {booking.amountPaid > 0 ? <Row label="Received so far" value={formatCurrency(booking.amountPaid)} /> : null}
             <Row label="Name" value={booking.customerName} />
             <Row label="Mobile" value={`+91 ${booking.customerPhone}`} />
-            <Row label="Requested on" value={`${formatIstTimestamp(booking.createdAt)} IST`} />
+            <Row
+              label={confirmed ? "Booked on" : "Requested on"}
+              value={`${formatIstTimestamp(booking.createdAt)} IST`}
+            />
             <Row
               label="Status"
               value={
-                booking.paymentVerificationStatus === "PARTIAL"
-                  ? `Balance of ${formatCurrency(booking.amount - booking.amountPaid)} due`
-                  : "Awaiting payment verification"
+                confirmed
+                  ? owed > 0
+                    ? `Confirmed — pay ${formatCurrency(owed)} at the ground`
+                    : "Confirmed — payment received"
+                  : rejected
+                    ? "Payment could not be verified"
+                    : booking.paymentVerificationStatus === "PARTIAL"
+                      ? `Balance of ${formatCurrency(owed)} due`
+                      : "Awaiting payment verification"
               }
             />
           </dl>
@@ -107,25 +135,61 @@ export default async function BookingSuccessPage() {
             </div>
           ) : null}
 
-          <div className="mt-5 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm">
-            <p className="font-semibold text-amber-100">What happens next</p>
-            <ol className="mt-2 space-y-1.5 text-amber-100">
-              <li>
-                <strong>1.</strong> We check your payment screenshot against the amount above.
-              </li>
-              <li>
-                <strong>2.</strong> Once the payment is verified, we message you on WhatsApp to confirm your slot.
-              </li>
-            </ol>
-            <p className="mt-3 border-t border-amber-200 pt-2 text-amber-100">
-              Your slot is held for you while we check. <strong>This is not a confirmation yet</strong> — it becomes
-              confirmed only after we verify the payment and message you.
-            </p>
-          </div>
+          {confirmed ? (
+            <div className="mt-5 rounded-lg border border-lime-400/30 bg-lime-400/10 p-4 text-sm">
+              <p className="font-semibold text-lime-100">What happens next</p>
+              <ol className="mt-2 space-y-1.5 text-lime-100">
+                <li>
+                  <strong>1.</strong> Nothing more to do online — your slot is booked.
+                </li>
+                <li>
+                  <strong>2.</strong> Reach the ground 10 minutes early and show this reference.
+                </li>
+                {owed > 0 ? (
+                  <li>
+                    <strong>3.</strong> Pay {formatCurrency(owed)} at the counter.
+                  </li>
+                ) : null}
+              </ol>
+              <p className="mt-3 border-t border-lime-200/40 pt-2 text-lime-100">
+                <strong>This slot is yours.</strong> To change or cancel it, message us on WhatsApp.
+              </p>
+            </div>
+          ) : rejected ? (
+            <div className="mt-5 rounded-lg border border-red-400/40 bg-red-400/10 p-4 text-sm">
+              <p className="font-semibold text-red-100">This booking was not confirmed</p>
+              <p className="mt-1 text-red-100">
+                {booking.rejectionReason?.trim()
+                  ? booking.rejectionReason
+                  : "We could not verify the payment for this booking."}{" "}
+                The slot has been released. Message us on WhatsApp if you think this is wrong — quote the reference
+                above.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-5 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm">
+              <p className="font-semibold text-amber-100">What happens next</p>
+              <ol className="mt-2 space-y-1.5 text-amber-100">
+                <li>
+                  <strong>1.</strong> We check your payment screenshot against the amount above.
+                </li>
+                <li>
+                  <strong>2.</strong> Once the payment is verified, we message you on WhatsApp to confirm your slot.
+                </li>
+              </ol>
+              <p className="mt-3 border-t border-amber-200 pt-2 text-amber-100">
+                Your slot is held for you while we check. <strong>This is not a confirmation yet</strong> — it becomes
+                confirmed only after we verify the payment and message you.
+              </p>
+            </div>
+          )}
 
           <p className="print-only mt-4 border-t border-white/15 pt-3 text-xs">
-            This document records a booking request only. It is not proof of a confirmed booking or of payment
-            received.
+            {confirmed
+              ? owed > 0
+                ? `This slot is confirmed. It is not a receipt — ${formatCurrency(owed)} is payable at the ground.`
+                : "This slot is confirmed and paid in full."
+              : "This document records a booking request only. It is not proof of a confirmed booking or of payment received."}
             {settings.supportPhone ? ` Queries: +91 ${settings.supportPhone}.` : ""}
           </p>
         </div>
@@ -154,7 +218,8 @@ export default async function BookingSuccessPage() {
         </div>
 
         <Alert tone="info" className="no-print mt-4">
-          Tip: choose <strong>Save as PDF</strong> in the print dialog to keep a copy on your phone.
+          Tip: <strong>Download receipt</strong> opens your print dialog — choose <strong>Save as PDF</strong> there to
+          keep a copy on your phone.
         </Alert>
       </main>
     </div>
