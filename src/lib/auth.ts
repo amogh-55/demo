@@ -166,22 +166,3 @@ export function readSignedCookieValue(raw: string | undefined): string | null {
 
 /* ── Audit log ─────────────────────────────────────────────────────────── */
 
-export async function recordAudit(
-  admin: AdminSession,
-  action: string,
-  entityType: string,
-  entityId: string,
-  metadata: Record<string, unknown> = {},
-): Promise<void> {
-  const db = await getDb();
-  await collections.auditLogs(db).insertOne({
-    _id: new ObjectId(),
-    adminId: admin.id,
-    adminUsername: admin.username,
-    action,
-    entityType,
-    entityId,
-    metadata,
-    createdAt: new Date(),
-  });
-}

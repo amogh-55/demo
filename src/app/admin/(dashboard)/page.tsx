@@ -25,7 +25,7 @@ export default async function AdminDashboardPage({
   const activeId = locations.some((l) => l._id.toHexString() === requested) ? requested : "";
   const scope = activeId ? { locationId: new ObjectId(activeId) } : {};
 
-  const [byStatus, todayBookings, pendingPayments, blockedUnits, blockedDays, byLocation, recent, takings] =
+  const [byStatus, todayBookings, pendingPayments, blockedUnits, blockedDays, byLocation, takings] =
     await Promise.all([
       collections
         .bookings(db)
@@ -50,12 +50,6 @@ export default async function AdminDashboardPage({
           { $group: { _id: "$locationName", count: { $sum: 1 } } },
           { $sort: { count: -1 } },
         ])
-        .toArray(),
-      collections
-        .auditLogs(db)
-        .find({})
-        .sort({ createdAt: -1 })
-        .limit(6)
         .toArray(),
       // Money actually collected for today, which is the number an owner opens
       // the page to see.
@@ -211,25 +205,6 @@ export default async function AdminDashboardPage({
                   <span className="shrink-0 rounded-full bg-ink-100 px-2 py-0.5 text-xs font-semibold text-ink-800">
                     {l.count}
                   </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="card">
-          <h2 className="font-semibold text-ink-900">Recent staff activity</h2>
-          {recent.length === 0 ? (
-            <p className="mt-3 text-sm text-ink-500">Nothing yet.</p>
-          ) : (
-            <ul className="mt-3 space-y-2 text-sm">
-              {recent.map((a) => (
-                <li key={a._id.toHexString()} className="flex flex-wrap items-baseline justify-between gap-x-3">
-                  <span className="min-w-0 break-words text-ink-700">
-                    <span className="font-medium">{a.adminUsername}</span> · {a.action.replaceAll("_", " ").toLowerCase()}
-                  </span>
-                  {/* ink-400 on white is under 4.5:1 — too thin for a 12px timestamp on a phone. */}
-                  <span className="text-xs text-ink-500">{formatIstTimestamp(a.createdAt)}</span>
                 </li>
               ))}
             </ul>

@@ -1,6 +1,6 @@
 import type { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import {
   blockDay,
   blockSlots,
@@ -85,13 +85,6 @@ export async function POST(request: Request) {
 
     if (blocked > 0) {
       const { entityType, entityId } = auditTarget(input);
-      await recordAudit(admin, scope === "DAY" ? "DAY_BLOCKED" : "SLOT_BLOCKED", entityType, entityId, {
-        date: input.date,
-        reason: input.reason,
-        forced: input.force,
-        resources: resourceIds.length,
-        ...(slots ? { startMin: slots.startMin, endMin: slots.endMin } : {}),
-      });
     }
 
     return ok({ scope, blocked, conflicts: input.force ? conflicts : [], needsConfirmation: false });
@@ -120,11 +113,6 @@ export async function DELETE(request: Request) {
       }
     }
 
-    await recordAudit(admin, scope === "DAY" ? "DAY_UNBLOCKED" : "SLOT_UNBLOCKED", entityType, entityId, {
-      date: input.date,
-      unblocked,
-      resources: resourceIds.length,
-    });
     return ok({ scope, unblocked });
   } catch (err) {
     return fail(err, { route: "DELETE /api/admin/blocks" });

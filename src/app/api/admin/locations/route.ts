@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { collections, getDb, isDuplicateKeyError } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { locationCreateSchema } from "@/lib/validation";
@@ -51,7 +51,6 @@ export async function POST(request: Request) {
     // owner adds the box, the nets or the courts themselves. Until they do, the
     // location has nothing bookable and is hidden from customers rather than
     // offered as an empty page.
-    await recordAudit(admin, "LOCATION_CREATED", "location", _id.toHexString(), { name: input.name });
     return ok({ id: _id.toHexString() });
   } catch (err) {
     return fail(err, { route: "POST /api/admin/locations" });

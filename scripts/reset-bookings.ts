@@ -8,7 +8,7 @@
  * Run it once, while the only bookings in the database are test ones, and never
  * again after a real customer has paid for something.
  *
- * Admin accounts, settings and the audit log are left alone.
+ * Admin accounts and settings are left alone.
  */
 import { MongoClient } from "mongodb";
 import { config as loadEnv } from "./env";

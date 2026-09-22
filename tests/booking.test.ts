@@ -210,7 +210,6 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       collections.slotUnits(db).deleteMany({}),
       collections.bookings(db).deleteMany({}),
       collections.dayBlocks(db).deleteMany({}),
-      collections.auditLogs(db).deleteMany({}),
     ]);
   });
 

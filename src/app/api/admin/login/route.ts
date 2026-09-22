@@ -1,5 +1,5 @@
 import { fail, ok, readJson } from "@/lib/api";
-import { authenticateAdmin, recordAudit, startSession } from "@/lib/auth";
+import { authenticateAdmin, startSession } from "@/lib/auth";
 import { appError } from "@/lib/errors";
 import { clientIp, rateLimit, resetRateLimit } from "@/lib/rate-limit";
 import { adminLoginSchema } from "@/lib/validation";
@@ -22,7 +22,6 @@ export async function POST(request: Request) {
 
     await startSession(session);
     await resetRateLimit(`login-user:${input.username.toLowerCase()}`);
-    await recordAudit(session, "ADMIN_LOGIN", "adminUser", session.id, { ip });
 
     return ok({ user: { username: session.username, displayName: session.displayName } });
   } catch (err) {

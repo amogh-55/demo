@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { forgetResourceContext } from "@/lib/booking/service";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
@@ -31,7 +31,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       .findOneAndUpdate({ _id: id }, { $set: { ...patch, updatedAt: new Date() } }, { returnDocument: "after" });
     if (!updated) throw appError("NOT_FOUND", "That facility does not exist.");
 
-    await recordAudit(admin, "FACILITY_UPDATED", "facility", id.toHexString(), { fields: Object.keys(patch) });
     // The cached resource context still describes this as it was, so it is
     // dropped now the write has landed — the owner sees their own edit at
     // once rather than whenever the short TTL happens to lapse.
@@ -89,15 +88,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     await collections.facilities(db).updateOne({ _id: id }, { $set: { config, updatedAt: new Date() } });
 
     // Existing bookings keep their price snapshot; only future pricing changes.
-    await recordAudit(admin, "PRICE_CHANGED", "facility", id.toHexString(), {
-      openMin: config.openMin,
-      closeMin: config.closeMin,
-      slotMinutes: config.slotMinutes,
-      priceRules: config.priceRules,
-      ballTypes: config.ballTypes,
-      oversPerSlot: config.oversPerSlot,
-      payAtVenueMaxOvers: config.payAtVenueMaxOvers,
-    });
 
     // The cached resource context still describes this as it was, so it is
     // dropped now the write has landed — the owner sees their own edit at

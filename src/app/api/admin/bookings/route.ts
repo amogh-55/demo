@@ -1,5 +1,5 @@
 import { fail, ok, readJson } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { listBookings } from "@/lib/booking/admin-list";
 import { createManualBooking } from "@/lib/booking/service";
 import { adminBookingCreateSchema, adminBookingsQuerySchema } from "@/lib/validation";
@@ -46,13 +46,6 @@ export async function POST(request: Request) {
       admin,
     });
 
-    await recordAudit(admin, "BOOKING_TAKEN_BY_STAFF", "booking", booking.reference, {
-      date: booking.date,
-      startMin: booking.startMin,
-      endMin: booking.endMin,
-      amount: booking.amount,
-      collected: input.amountPaid,
-    });
 
     return ok({
       booking: {

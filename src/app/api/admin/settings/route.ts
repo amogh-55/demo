@@ -1,5 +1,5 @@
 import { fail, ok, readJson } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { getSettings, saveSettings } from "@/lib/settings";
 import { settingsSchema } from "@/lib/validation";
 
@@ -35,11 +35,6 @@ export async function PUT(request: Request) {
     // The UPI id itself is scrubbed by the logger; only the fact of a change is recorded.
     // The SMS switches ARE recorded by value: turning them on starts spending the
     // owner's money, so who did it and when belongs in the audit trail.
-    await recordAudit(admin, "SETTINGS_UPDATED", "settings", "business", {
-      fields: Object.keys(input),
-      otpEnabled: input.otpEnabled,
-      notifyOnNewBooking: input.notifyOnNewBooking,
-    });
     return ok({
       saved: true,
       settings: { otpEnabled: saved.otpEnabled, notifyOnNewBooking: saved.notifyOnNewBooking },

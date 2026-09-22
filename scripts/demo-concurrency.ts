@@ -100,7 +100,6 @@ async function clean() {
 
   const bookings = ids.length ? await db.collection("bookings").deleteMany({ _id: { $in: ids } }) : { deletedCount: 0 };
   if (demo.length) {
-    await db.collection("auditLogs").deleteMany({ entityId: { $in: demo.map((b) => b.reference) } });
   }
 
   console.log(

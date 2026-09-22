@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { fail } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { getScreenshotAccess } from "@/lib/storage";
@@ -48,9 +48,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!key) throw appError("NOT_FOUND", "No payment screenshot was uploaded.");
 
     const access = await getScreenshotAccess(key, 300);
-    await recordAudit(admin, "PAYMENT_SCREENSHOT_VIEWED", "booking", booking.reference, {
-      attemptId: attempt?.id ?? null,
-    });
 
     if (access.kind === "redirect") {
       return NextResponse.redirect(access.url, { status: 302, headers: PRIVATE });

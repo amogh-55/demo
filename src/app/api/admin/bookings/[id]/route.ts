@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
-import { recordAudit, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import {
   confirmBooking,
   recordManualPayment,
@@ -44,6 +44,7 @@ function serialise(b: BookingDoc) {
     endMin: b.endMin,
     unitStarts: b.unitStarts,
     amount: b.amount,
+    amountDueNow: b.amountDueNow ?? b.amount,
     priceBreakdown: b.priceBreakdown,
     customerName: b.customerName,
     customerPhone: b.customerPhone,
@@ -88,7 +89,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const booking = await collections.bookings(db).findOne({ _id: id }, { projection: { holdTokenHash: 0 } });
     if (!booking) throw appError("NOT_FOUND", "That booking no longer exists.");
 
-    await recordAudit(admin, "BOOKING_VIEWED", "booking", booking.reference);
     return ok({ booking: serialise(booking as BookingDoc) });
   } catch (err) {
     return fail(err, { route: "GET /api/admin/bookings/[id]" });
@@ -116,12 +116,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           note: action.note,
           admin,
         });
-        await recordAudit(admin, "PAYMENT_VERIFIED", "booking", booking.reference, {
-          recorded: action.amount,
-          totalPaid: booking.amountPaid,
-          expected: booking.amount,
-          outcome: booking.paymentVerificationStatus,
-        });
         break;
 
       case "REJECT_PAYMENT":
@@ -133,7 +127,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           note: action.note,
           admin,
         });
-        await recordAudit(admin, "PAYMENT_REJECTED", "booking", booking.reference, { note: action.note });
         break;
 
       case "RECORD_PAYMENT":
@@ -144,27 +137,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           utr: action.utr ?? null,
           admin,
         });
-        await recordAudit(admin, "PAYMENT_RECORDED_BY_STAFF", "booking", booking.reference, {
-          recorded: action.amount,
-          note: action.note,
-          totalPaid: booking.amountPaid,
-          expected: booking.amount,
-          outcome: booking.paymentVerificationStatus,
-        });
         break;
 
       case "CONFIRM":
         booking = await confirmBooking(id, admin);
-        await recordAudit(admin, "BOOKING_CONFIRMED", "booking", booking.reference, {
-          date: booking.date,
-          startMin: booking.startMin,
-          endMin: booking.endMin,
-        });
         break;
 
       case "REJECT":
         booking = await rejectBooking(id, action.reason, admin);
-        await recordAudit(admin, "BOOKING_REJECTED", "booking", booking.reference, { reason: action.reason });
         break;
 
       case "WHATSAPP_OPENED": {
@@ -174,7 +154,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         if (!found) throw appError("NOT_FOUND", "That booking no longer exists.");
         booking = found;
         // Recorded as "opened", never "sent" — the admin still presses send themselves.
-        await recordAudit(admin, `WHATSAPP_${action.kind}_OPENED`, "booking", booking.reference);
         break;
       }
     }

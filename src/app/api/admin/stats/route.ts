@@ -31,13 +31,6 @@ export async function GET() {
 
     const statusCount = (status: string) => byStatus.find((s) => s._id === status)?.count ?? 0;
 
-    const recentAudit = await collections
-      .auditLogs(db)
-      .find({}, { projection: { metadata: 0 } })
-      .sort({ createdAt: -1 })
-      .limit(8)
-      .toArray();
-
     return ok({
       today,
       generatedAt: now.toISOString(),
@@ -49,12 +42,6 @@ export async function GET() {
       blockedUnits,
       blockedDays,
       byLocation: byLocation.map((l) => ({ name: l.name, count: l.count })),
-      recentActivity: recentAudit.map((a) => ({
-        action: a.action,
-        entityId: a.entityId,
-        by: a.adminUsername,
-        at: a.createdAt.toISOString(),
-      })),
     });
   } catch (err) {
     return fail(err, { route: "GET /api/admin/stats" });

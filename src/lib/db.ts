@@ -2,7 +2,6 @@ import "server-only";
 import { MongoClient, type CreateIndexesOptions, type Db, type Collection } from "mongodb";
 import type {
   AdminUserDoc,
-  AuditLogDoc,
   BookingDoc,
   DayBlockDoc,
   FacilityDoc,
@@ -89,7 +88,6 @@ export const collections = {
   dayBlocks: (db: Db) => db.collection<DayBlockDoc>("dayBlocks"),
   bookings: (db: Db) => db.collection<BookingDoc>("bookings"),
   adminUsers: (db: Db) => db.collection<AdminUserDoc>("adminUsers"),
-  auditLogs: (db: Db) => db.collection<AuditLogDoc>("auditLogs"),
   settings: (db: Db) => db.collection<SettingsDoc>("settings") as unknown as Collection<SettingsDoc>,
   otpChallenges: (db: Db) => db.collection<OtpChallengeDoc>("otpChallenges") as unknown as Collection<OtpChallengeDoc>,
   rateLimits: (db: Db) => db.collection<RateLimitDoc>("rateLimits"),
@@ -172,12 +170,6 @@ const INDEXES: IndexSpec[] = [
   { collection: "bookings", name: "createdAt_-1", keys: { createdAt: -1 } },
 
   { collection: "adminUsers", name: "username_1", keys: { username: 1 }, options: { unique: true } },
-  { collection: "auditLogs", name: "createdAt_-1", keys: { createdAt: -1 } },
-  {
-    collection: "auditLogs",
-    name: "entityType_1_entityId_1_createdAt_-1",
-    keys: { entityType: 1, entityId: 1, createdAt: -1 },
-  },
 
   {
     collection: "otpChallenges",
