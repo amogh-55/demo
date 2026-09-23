@@ -12,11 +12,21 @@ interface Settings {
   upiPayeeName: string;
   upiQrImageUrl: string;
   otpEnabled: boolean;
+  razorpayEnabled: boolean;
   notifyPhone: string;
   notifyOnNewBooking: boolean;
 }
 
-export function SettingsForm({ initial, smsReady }: { initial: Settings; smsReady: boolean }) {
+export function SettingsForm({
+  initial,
+  smsReady,
+  razorpay,
+}: {
+  initial: Settings;
+  smsReady: boolean;
+  /** What the deployment can actually do, as opposed to what the switch says. */
+  razorpay: { ready: boolean; webhookReady: boolean; live: boolean };
+}) {
   const [form, setForm] = React.useState(initial);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -77,6 +87,41 @@ export function SettingsForm({ initial, smsReady }: { initial: Settings; smsRead
               hint="Path or URL of the QR image customers scan"
             />
           </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2 className="font-semibold text-ink-900">Online payment (Razorpay)</h2>
+        <p className="mt-1 text-sm text-ink-600">
+          Lets customers pay by card, UPI or netbanking while they book. Those bookings confirm themselves — there is no
+          screenshot for you to check. The UPI screenshot option stays available either way.
+        </p>
+
+        {!razorpay.ready ? (
+          <Alert tone="warning" className="mt-3">
+            No Razorpay keys are connected to this deployment, so this switch does nothing yet. Add them before turning
+            it on.
+          </Alert>
+        ) : !razorpay.webhookReady ? (
+          <Alert tone="warning" className="mt-3">
+            The webhook secret is missing. Payments will still work, but if a customer loses connection just after
+            paying, their booking will not confirm itself. Add RAZORPAY_WEBHOOK_SECRET.
+          </Alert>
+        ) : (
+          <Alert tone={razorpay.live ? "warning" : "info"} className="mt-3">
+            {razorpay.live
+              ? "LIVE keys are connected. Payments taken here move real money."
+              : "TEST keys are connected. No real money moves — use Razorpay's test cards."}
+          </Alert>
+        )}
+
+        <div className="mt-4">
+          <Toggle
+            label="Take payments online with Razorpay"
+            hint="Customers choose card/UPI/netbanking or the usual UPI screenshot. Turn it off to go back to screenshots only."
+            checked={form.razorpayEnabled}
+            onChange={(razorpayEnabled) => set({ razorpayEnabled })}
+          />
         </div>
       </section>
 

@@ -95,6 +95,15 @@ function serialiseForList(b: BookingDoc) {
     // Null unless the owner wrote this one in from a phone call, which is why
     // it has no screenshot and often no money yet.
     createdBy: b.createdBy ?? null,
+    /**
+     * How this booking paid online, or null for one that never had to.
+     *
+     * The admin screen needs it to know which absences are normal: a RAZORPAY
+     * booking has no screenshot and no UTR to review because the gateway settled
+     * it, and showing "no screenshot" beside it would send the owner looking for
+     * one that was never meant to exist.
+     */
+    paymentMethod: b.paymentMethod ?? null,
     date: b.date,
     startMin: b.startMin,
     endMin: b.endMin,
@@ -124,6 +133,11 @@ function serialiseForList(b: BookingDoc) {
        */
       uploadStatus: p.uploadStatus ?? (p.screenshotKey ? "UPLOADED" : "NONE"),
       uploadFailureReason: p.uploadFailureReason ?? null,
+      // Absent on every attempt taken before the gateway existed, all of which
+      // were somebody reading a screenshot.
+      provider: p.provider ?? "MANUAL",
+      razorpayPaymentId: p.razorpayPaymentId ?? null,
+      razorpayMethod: p.razorpayMethod ?? null,
     })),
     /**
      * The customer paid, sent a valid screenshot, and our storage refused it.

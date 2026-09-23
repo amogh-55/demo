@@ -238,6 +238,9 @@ async function main() {
       customerName: DEMO_NAME,
       customerPhone: DEMO_PHONE,
       paymentScreenshotKey: DEMO_SCREENSHOT_KEY,
+      // Required for anything paid online since the UTR became the thing a
+      // payment is traced by. Without it the demo stops at step 5.
+      utr: "123456789012",
       amount: 1, // deliberately wrong: the server must ignore it
     }),
   });

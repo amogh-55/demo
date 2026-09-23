@@ -6,6 +6,7 @@ import { getPublicCatalog, widestBookingWindow } from "@/lib/catalog";
 import { istDateString } from "@/lib/time";
 import { getSettings } from "@/lib/settings";
 import { widgetConfig } from "@/lib/msg91-widget";
+import { razorpayConfigured } from "@/lib/razorpay";
 import { BookingFlow } from "@/components/customer/booking-flow";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +54,10 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
             locations={locations}
             otpEnabled={settings.otpEnabled}
             otpWidget={widgetConfig()}
+            /* Both halves: the keys have to be deployed AND the owner has to have
+               switched it on. Every request checks the same pair again, so a page
+               left open across a settings change cannot open a dead checkout. */
+            onlinePaymentReady={razorpayConfigured() && settings.razorpayEnabled}
             payment={{
               businessName: settings.businessName,
               upiId: settings.upiId,

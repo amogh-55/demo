@@ -24,6 +24,8 @@ interface AdminBooking {
   payAtVenue: boolean;
   /** Set when the owner took this booking over the phone, so it has no payment behind it. */
   createdBy: string | null;
+  /** RAZORPAY settles itself; UPI_MANUAL needs an admin to look at a screenshot. */
+  paymentMethod: "UPI_MANUAL" | "RAZORPAY" | null;
   date: string;
   startMin: number;
   endMin: number;
@@ -558,6 +560,22 @@ function BookingCard({
   const isPending = booking.status === "PENDING";
   /** The reference on the most recent payment that carries one. */
   const latestUtr = [...booking.payments].reverse().find((p) => p.utr)?.utr ?? null;
+  /**
+   * How this booking's money arrives, in one phrase.
+   *
+   * Worth its own line on the card: the owner's whole routine for a UPI booking is
+   * "open the screenshot and check it", and for a Razorpay one there is nothing to
+   * open and nothing to check. Without saying which is which, a gateway booking
+   * reads as a UPI booking whose customer forgot to attach anything.
+   */
+  const gateway = booking.paymentMethod === "RAZORPAY";
+  const methodLabel = booking.createdBy
+    ? "Phone booking"
+    : booking.payAtVenue
+      ? "Pay at ground"
+      : gateway
+        ? "Razorpay"
+        : "UPI screenshot";
   // Confirming needs the money to actually add up, not just a verified flag.
   const paidInFull = booking.paymentVerificationStatus === "VERIFIED" && booking.amountRemaining <= 0;
   const owes = booking.amountRemaining > 0;
@@ -617,8 +635,11 @@ function BookingCard({
           </div>
           <div className="flex items-center gap-1.5">
             <dt className="text-ink-500">Payment</dt>
-            <dd>
+            <dd className="flex items-center gap-1.5">
               <StatusBadge status={booking.paymentVerificationStatus} />
+              <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium text-ink-600">
+                {methodLabel}
+              </span>
             </dd>
           </div>
         </dl>
@@ -664,6 +685,12 @@ function BookingCard({
             ) : booking.payAtVenue || booking.createdBy ? (
               // Not a payment to chase: this one was always going to be paid at the gate.
               <span className="text-amber-700">collect at the ground</span>
+            ) : gateway && isPending ? (
+              // Not a payment to chase either: this one is mid-checkout, and its
+              // slots go back on sale by themselves if the money never lands.
+              // Only while it is still pending — a released booking is waiting
+              // for nothing, and saying otherwise sends staff looking for it.
+              <span className="text-amber-700">awaiting online payment</span>
             ) : onAdvance ? (
               <span className="text-amber-700">advance {formatCurrency(booking.amountDueNow)} expected</span>
             ) : (
@@ -699,7 +726,7 @@ function BookingCard({
         <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-sm">
           <span className="text-ink-500">UTR</span>
           <span className="select-all font-mono font-semibold tracking-wide text-ink-800">{latestUtr}</span>
-          {!booking.hasScreenshot ? (
+          {!booking.hasScreenshot && !gateway ? (
             <span className="text-xs text-ink-500">(no screenshot — check the statement)</span>
           ) : null}
         </p>

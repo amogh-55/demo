@@ -32,6 +32,20 @@ export const phoneSchema = z
   })
   .refine((v) => /^[6-9]\d{9}$/.test(v), "Enter a valid 10-digit Indian mobile number");
 
+/**
+ * A customer's email address, which exists only so a confirmation can be sent to
+ * it. Optional everywhere — an empty string means "they did not give one" rather
+ * than a validation failure, because a blank optional field is what an untouched
+ * input actually submits.
+ */
+export const optionalEmailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(120, "That email address is too long")
+  .refine((v) => v === "" || /^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test(v), "Enter a valid email address, or leave it blank")
+  .transform((v) => (v === "" ? null : v));
+
 export const customerNameSchema = z
   .string()
   .trim()
@@ -109,6 +123,32 @@ export const bookingSubmitSchema = z.object({
    * configuration, so this cannot be used to decide what is owed.
    */
   payAdvance: z.boolean().optional(),
+  /**
+   * Which payment method the customer chose. A preference, not permission: the
+   * server checks its own Razorpay configuration and the owner's own switch, and
+   * refuses outright if online payment is asked for while it is not available —
+   * it never silently downgrades to the manual flow, which would leave the
+   * customer staring at a demand for a UTR they were never asked to produce.
+   */
+  paymentMethod: z.enum(["UPI_MANUAL", "RAZORPAY"]).optional(),
+  /** Optional. Only ever used to email a confirmation. */
+  customerEmail: optionalEmailSchema.nullish().transform((v) => v ?? null),
+});
+
+/**
+ * What Razorpay Checkout hands back on success.
+ *
+ * All three are checked against Razorpay itself before a rupee is recorded, so
+ * the only job here is to refuse a body that could not possibly have come from
+ * the gateway.
+ */
+export const razorpayVerifySchema = z.object({
+  razorpay_order_id: z.string().trim().min(6).max(60),
+  razorpay_payment_id: z.string().trim().min(6).max(60),
+  razorpay_signature: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/i, "Invalid payment signature"),
 });
 
 /**
@@ -447,6 +487,8 @@ export const settingsSchema = z.object({
    */
   upiQrImageUrl: httpUrlSchema.default(""),
   otpEnabled: z.boolean().default(false),
+  /** Has no effect without Razorpay keys in the environment; the form says so. */
+  razorpayEnabled: z.boolean().default(false),
   /** Blank is allowed and means "use the support number". */
   notifyPhone: z.union([z.literal(""), phoneSchema]).default(""),
   notifyOnNewBooking: z.boolean().default(false),

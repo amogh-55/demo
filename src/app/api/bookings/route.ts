@@ -6,6 +6,7 @@ import { uploadFailureProven } from "@/lib/booking/upload-failure";
 import { appError } from "@/lib/errors";
 import { OTP_COOKIE, readVerifiedPhone } from "@/lib/otp";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { razorpayConfigured } from "@/lib/razorpay";
 import { getSettings } from "@/lib/settings";
 import { notifyNewBooking } from "@/lib/sms";
 import { formatBusinessDate, formatCompactRange } from "@/lib/time";
@@ -42,6 +43,21 @@ export async function POST(request: Request) {
     const settings = await getSettings();
     const verifiedPhone = readVerifiedPhone(jar.get(OTP_COOKIE)?.value);
 
+    /*
+     * Whether this booking may skip the UTR and the screenshot is decided HERE,
+     * from the server's own keys and the owner's own switch — never from the body.
+     * A client that asks for the gateway while it is unavailable is refused
+     * outright rather than quietly downgraded, which would leave the customer
+     * looking at a demand for a payment reference nobody asked them to produce.
+     */
+    const gatewayReady = razorpayConfigured() && settings.razorpayEnabled;
+    if (input.paymentMethod === "RAZORPAY" && !gatewayReady) {
+      throw appError(
+        "CONFLICT",
+        "Online card/UPI payment is not available right now. Please pay by UPI and upload a screenshot instead.",
+      );
+    }
+
     const booking = await submitBooking({
       holdToken: input.holdToken,
       customerName: input.customerName,
@@ -49,6 +65,8 @@ export async function POST(request: Request) {
       paymentScreenshotKey: input.paymentScreenshotKey,
       utr: input.utr,
       payAdvance: input.payAdvance,
+      paymentMethod: input.paymentMethod === "RAZORPAY" ? "RAZORPAY" : "UPI_MANUAL",
+      customerEmail: input.customerEmail,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,
       /*
@@ -59,7 +77,14 @@ export async function POST(request: Request) {
       storageFailed: uploadFailureProven(jar.get(UPLOAD_FAILED_COOKIE)?.value, input.holdToken),
     });
 
-    if (settings.notifyOnNewBooking) {
+    /*
+     * A gateway booking has not been paid for yet and may never be, so the owner
+     * is told about it when the money lands rather than when the form was
+     * submitted — the settle path sends this same alert. Texting them about a
+     * booking that evaporates in fifteen minutes costs them money and trust in
+     * the alert.
+     */
+    if (settings.notifyOnNewBooking && booking.paymentMethod !== "RAZORPAY") {
       notifyNewBooking(settings.notifyPhone || settings.supportPhone, {
         reference: booking.reference,
         customerName: booking.customerName,
@@ -98,6 +123,9 @@ export async function POST(request: Request) {
       amount: booking.amount,
       amountDueNow: booking.amountDueNow ?? booking.amount,
       customerPhone: booking.customerPhone,
+      // The browser needs to know whether to open checkout next, or whether the
+      // booking is already finished with (a pay-at-the-ground session).
+      paymentMethod: booking.paymentMethod ?? null,
     });
   } catch (err) {
     return fail(err, { route: "POST /api/bookings" });

@@ -39,6 +39,8 @@ function serialise(b: BookingDoc) {
     payAtVenue: Boolean(b.payAtVenue),
     /** The staff member who took this booking over the phone, or null. */
     createdBy: b.createdBy ?? null,
+    /** RAZORPAY, UPI_MANUAL, or null for a booking that never paid online. */
+    paymentMethod: b.paymentMethod ?? null,
     date: b.date,
     startMin: b.startMin,
     endMin: b.endMin,
@@ -65,6 +67,9 @@ function serialise(b: BookingDoc) {
       hasScreenshot: Boolean(p.screenshotKey),
       uploadStatus: p.uploadStatus ?? (p.screenshotKey ? "UPLOADED" : "NONE"),
       uploadFailureReason: p.uploadFailureReason ?? null,
+      provider: p.provider ?? "MANUAL",
+      razorpayPaymentId: p.razorpayPaymentId ?? null,
+      razorpayMethod: p.razorpayMethod ?? null,
     })),
     screenshotUploadStatus: b.paymentScreenshotKey
       ? "UPLOADED"

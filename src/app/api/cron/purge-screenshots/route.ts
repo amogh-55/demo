@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { fail, ok } from "@/lib/api";
+import { reclaimAbandonedOnlinePayments } from "@/lib/booking/online-payment";
 import { purgeExpiredScreenshots, purgeOrphanScreenshots } from "@/lib/booking/service";
 import { appError } from "@/lib/errors";
 import { log } from "@/lib/log";
@@ -35,7 +36,14 @@ export async function GET(request: Request) {
     // the database, so both sweeps have to run.
     const result = await purgeExpiredScreenshots();
     const orphans = await purgeOrphanScreenshots();
-    return ok({ ...result, orphans });
+    /*
+     * The catch-all for abandoned online payments. The availability endpoint
+     * reclaims the ones somebody is looking at, which is almost all of them; this
+     * sweeps up a slot on a day nobody has opened since, so the admin list is not
+     * slowly filled with bookings that were never paid for.
+     */
+    const reclaimed = await reclaimAbandonedOnlinePayments();
+    return ok({ ...result, orphans, reclaimed });
   } catch (err) {
     return fail(err, { route: "GET /api/cron/purge-screenshots" });
   }

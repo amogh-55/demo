@@ -167,6 +167,17 @@ const INDEXES: IndexSpec[] = [
   { collection: "bookings", name: "date_1_status_1", keys: { date: 1, status: 1 } },
   { collection: "bookings", name: "resourceId_1_date_1", keys: { resourceId: 1, date: 1 } },
   { collection: "bookings", name: "customerPhone_1", keys: { customerPhone: 1 } },
+  /**
+   * How a Razorpay webhook finds the booking its payment belongs to.
+   *
+   * Sparse, because only an online booking ever has one. Deliberately NOT unique:
+   * order ids are already unique by construction on Razorpay's side, and a unique
+   * multikey index would raise E11000 on two bookings that both hold an empty
+   * array — an error this codebase reads everywhere as "somebody took that slot".
+   * Buying nothing for the risk of mistranslating a duplicate key into a
+   * double-booking message is a bad trade.
+   */
+  { collection: "bookings", name: "razorpayOrderIds_1", keys: { razorpayOrderIds: 1 }, options: { sparse: true } },
   { collection: "bookings", name: "createdAt_-1", keys: { createdAt: -1 } },
 
   { collection: "adminUsers", name: "username_1", keys: { username: 1 }, options: { unique: true } },

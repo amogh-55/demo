@@ -26,6 +26,14 @@ export interface PaymentAttemptView {
    */
   uploadStatus?: "UPLOADED" | "FAILED" | "NONE";
   uploadFailureReason?: "STORAGE_UNAVAILABLE" | null;
+  /**
+   * MANUAL means a person decided this one. RAZORPAY means the gateway did, and
+   * there is nothing here for an admin to accept or turn down — the money is
+   * already in the account.
+   */
+  provider?: "MANUAL" | "RAZORPAY";
+  razorpayPaymentId?: string | null;
+  razorpayMethod?: string | null;
 }
 
 export interface PaymentReviewBooking {
@@ -166,15 +174,19 @@ export function PaymentReviewDialog({
                     <span className="inline-flex h-11 min-w-0 items-center truncate text-ink-500">
                       #{i + 1} · {formatIstTimestamp(p.uploadedAt)}
                       <span className="ml-1.5 shrink-0 text-ink-400">
-                        {p.screenshotExpired
-                          ? "· image deleted after 7 days"
-                          : p.uploadStatus === "FAILED"
-                            ? // Our storage, not the customer: the distinction decides
-                              // whether the owner chases them or the bank statement.
-                              `· upload failed, UTR ${p.utr ?? "not given"}`
-                            : p.utr
-                              ? `· UTR ${p.utr}`
-                              : "· recorded by staff"}
+                        {p.provider === "RAZORPAY"
+                          ? // Nothing was uploaded and nothing was reviewed: Razorpay
+                            // took this one, so the useful reference is theirs.
+                            `· Razorpay${p.razorpayMethod ? ` ${p.razorpayMethod}` : ""} ${p.razorpayPaymentId ?? ""}`.trim()
+                          : p.screenshotExpired
+                            ? "· image deleted after 7 days"
+                            : p.uploadStatus === "FAILED"
+                              ? // Our storage, not the customer: the distinction decides
+                                // whether the owner chases them or the bank statement.
+                                `· upload failed, UTR ${p.utr ?? "not given"}`
+                              : p.utr
+                                ? `· UTR ${p.utr}`
+                                : "· recorded by staff"}
                       </span>
                     </span>
                   ) : (

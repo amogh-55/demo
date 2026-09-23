@@ -3,11 +3,12 @@
 import * as React from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Check, ChevronDown, Clock, Copy, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Clock, Copy, CreditCard, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
 import { ApiError, api, errorMessage } from "@/lib/client";
 import { freeRunLength, hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto, locationCover } from "@/lib/photos";
 import { Msg91OtpWidget } from "./msg91-otp-widget";
+import { openRazorpayCheckout } from "./razorpay-checkout";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
@@ -98,6 +99,20 @@ interface HoldResponse {
 
 type Step = "slots" | "details" | "payment";
 
+/** What the order route hands back. Either a charge to open, or "already paid". */
+interface OrderResponse {
+  alreadyPaid: boolean;
+  keyId: string;
+  orderId: string;
+  amountPaise: number;
+  currency: string;
+  reference: string;
+  amount: number;
+  businessName: string;
+  description: string;
+  prefill: { name: string; contact: string; email: string };
+}
+
 /** Slow poll while the slot list is on screen. Gentle enough not to hammer the API. */
 const AVAILABILITY_REFRESH_MS = 20_000;
 /** How long a "slot just taken" notice stays up before clearing itself. */
@@ -145,6 +160,7 @@ export function BookingFlow({
   bookingWindowDays,
   otpEnabled,
   otpWidget,
+  onlinePaymentReady,
 }: {
   locations: PublicLocation[];
   payment: PaymentSettings;
@@ -168,6 +184,13 @@ export function BookingFlow({
    * verification mean anything is never part of this and stays server-side.
    */
   otpWidget: { widgetId: string; tokenAuth: string } | null;
+  /**
+   * Whether Razorpay can actually take a payment: keys deployed AND the owner's
+   * switch on. Read on the server and checked there again on every request, so a
+   * page left open when the owner turns it off does not get a dead checkout — it
+   * gets a clear refusal and the UPI flow.
+   */
+  onlinePaymentReady: boolean;
 }) {
   const router = useRouter();
 
@@ -195,6 +218,8 @@ export function BookingFlow({
 
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
+  /** Optional, and only ever used to email a confirmation. */
+  const [email, setEmail] = React.useState("");
 
   /** The exact number that was verified, so editing a digit invalidates it. */
   const [verifiedPhone, setVerifiedPhone] = React.useState<string | null>(null);
@@ -232,6 +257,29 @@ export function BookingFlow({
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
+
+  /**
+   * How the customer wants to pay. Online by default where it is available — it
+   * confirms the booking on the spot instead of leaving both sides waiting on an
+   * admin to look at a screenshot — with the screenshot flow one tap away for
+   * anyone whose bank app is being difficult.
+   */
+  const [method, setMethod] = React.useState<"RAZORPAY" | "UPI_MANUAL">(
+    onlinePaymentReady ? "RAZORPAY" : "UPI_MANUAL",
+  );
+  /**
+   * The booking created for an online payment, kept so a retry pays for THAT
+   * booking rather than making a second one. This is what makes "pay again" after
+   * a cancelled checkout safe: the slots are already this customer's.
+   */
+  const [onlineReference, setOnlineReference] = React.useState<string | null>(null);
+  const [payingOnline, setPayingOnline] = React.useState(false);
+  /**
+   * Checkout said the money went through and our own server did not get to hear
+   * it. Turns the button from "pay" into "check my payment", because the one
+   * thing that must never be suggested here is paying a second time.
+   */
+  const [awaitingConfirmation, setAwaitingConfirmation] = React.useState(false);
 
   const location = locations.find((l) => l.id === locationId);
   const facility = location?.facilities.find((f) => f.id === facilityId);
@@ -379,12 +427,18 @@ export function BookingFlow({
     const tick = () => {
       const ms = new Date(hold.holdUntil).getTime() - Date.now();
       setRemaining(Math.max(0, Math.floor(ms / 1000)));
-      if (ms <= 0) setHoldExpired(true);
+      /*
+       * Once the booking exists the hold is spent and the slots belong to it, so
+       * the countdown stops meaning anything. Without this, a customer who is
+       * three minutes into Razorpay's window comes back to "your hold expired"
+       * over a booking that is sitting there perfectly intact.
+       */
+      if (ms <= 0 && !onlineReference) setHoldExpired(true);
     };
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [hold]);
+  }, [hold, onlineReference]);
 
   React.useEffect(() => {
     return () => {
@@ -653,15 +707,116 @@ export function BookingFlow({
         body: JSON.stringify({
           customerName: name,
           customerPhone: phone,
+          customerEmail: email,
           paymentScreenshotKey: screenshotKey,
           utr: hold?.payAtVenue ? null : utrDigits,
           payAdvance,
+          paymentMethod: "UPI_MANUAL",
         }),
       });
       router.push("/booking/success");
     } catch (err) {
       setError(errorMessage(err));
       setSubmitting(false);
+    }
+  }
+
+  /**
+   * Pay by card, UPI or netbanking, in four steps that can each be retried.
+   *
+   * The booking is created FIRST and kept in `onlineReference`, so pressing pay a
+   * second time after a cancelled checkout pays for the same booking rather than
+   * making another one and reserving a second slot. The amount is never sent from
+   * here — the order route works it out from the booking it just created.
+   */
+  async function payOnline() {
+    if (payingOnline) return;
+    setPayingOnline(true);
+    setError(null);
+    setAwaitingConfirmation(false);
+    try {
+      if (!onlineReference) {
+        const created = await api<{ reference: string }>("/api/bookings", {
+          method: "POST",
+          body: JSON.stringify({
+            customerName: name,
+            customerPhone: phone,
+            customerEmail: email,
+            paymentScreenshotKey: null,
+            utr: null,
+            payAdvance,
+            paymentMethod: "RAZORPAY",
+          }),
+        });
+        setOnlineReference(created.reference);
+      }
+
+      /*
+       * Also the recovery path: if the customer already paid and we never heard
+       * about it, this comes back `alreadyPaid` instead of raising a second
+       * charge. That is why "pay again" is safe to offer at every failure below.
+       */
+      const order = await api<OrderResponse>("/api/payments/razorpay/order", { method: "POST" });
+      if (order.alreadyPaid) {
+        router.push("/booking/success");
+        return;
+      }
+
+      const outcome = await openRazorpayCheckout({
+        keyId: order.keyId,
+        orderId: order.orderId,
+        amountPaise: order.amountPaise,
+        currency: order.currency,
+        businessName: order.businessName,
+        description: order.description,
+        prefill: order.prefill,
+      });
+
+      if (outcome.kind === "DISMISSED") {
+        setError("Payment cancelled. Nothing has been charged — your slot is still held, so you can try again.");
+        return;
+      }
+      if (outcome.kind === "FAILED") {
+        setError(`${outcome.message} Nothing has been charged. Your slot is still held — please try again.`);
+        return;
+      }
+
+      await api("/api/payments/razorpay/verify", { method: "POST", body: JSON.stringify(outcome.payload) });
+      router.push("/booking/success");
+    } catch (err) {
+      /*
+       * The dangerous moment: checkout succeeded and this request did not. The
+       * money may well be gone, so the customer is never told to pay again —
+       * they are given a button that ASKS whether the payment arrived, which
+       * settles it if it did and charges nothing if it did not.
+       */
+      setAwaitingConfirmation(Boolean(onlineReference));
+      setError(errorMessage(err));
+    } finally {
+      setPayingOnline(false);
+    }
+  }
+
+  /**
+   * "Did my payment go through?" — answered by the order route, which checks with
+   * Razorpay and settles anything it finds. Charges nothing on its own.
+   */
+  async function checkOnlinePayment() {
+    if (payingOnline) return;
+    setPayingOnline(true);
+    setError(null);
+    try {
+      const order = await api<OrderResponse>("/api/payments/razorpay/order", { method: "POST" });
+      if (order.alreadyPaid) {
+        router.push("/booking/success");
+        return;
+      }
+      setError("We have not received a payment for this booking yet. Nothing has been charged — you can pay now.");
+      setAwaitingConfirmation(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPayingOnline(false);
     }
   }
 
@@ -684,7 +839,17 @@ export function BookingFlow({
       ? "Enter a 10-digit Indian mobile number, starting 6, 7, 8 or 9."
       : null;
 
-  const detailsValid = !nameProblem && !phoneProblem && phoneVerified;
+  /**
+   * Blank is fine — it means "no email". Anything else has to look like an
+   * address, because a typo here is a confirmation that silently goes nowhere.
+   * The server checks the same thing; this only says so before the form is sent.
+   */
+  const emailProblem =
+    email.trim().length > 0 && !/^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test(email.trim())
+      ? "Enter a valid email address, or leave it blank."
+      : null;
+
+  const detailsValid = !nameProblem && !phoneProblem && !emailProblem && phoneVerified;
 
   /**
    * Whether the payment step may be submitted, and if not, what is missing.
@@ -694,7 +859,9 @@ export function BookingFlow({
    * charge a customer who has already paid for our own outage.
    */
   const storageIsDown = uploadProblem?.kind === "STORAGE";
-  const paymentProblem = hold?.payAtVenue
+  // The gateway asks for none of this: there is no reference to type and no image
+  // to send, because the booking is settled from Razorpay's own record of it.
+  const paymentProblem = hold?.payAtVenue || method === "RAZORPAY"
     ? null
     : !utrValid
       ? utrDigits.length === 0
@@ -1271,10 +1438,22 @@ export function BookingFlow({
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2">
             <p className="flex items-center gap-2 text-sm font-medium text-amber-100">
               <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
-              Slot held for{" "}
-              <span aria-live="polite" className="tabular-nums font-semibold">
-                {String(Math.floor(remaining / 60)).padStart(2, "0")}:{String(remaining % 60).padStart(2, "0")}
-              </span>
+              {/*
+                Once the booking exists the hold is spent — the slot belongs to
+                the booking, not to a token with a clock on it. Carrying on
+                counting down would tell a customer halfway through paying that
+                they are about to lose something they have already got.
+              */}
+              {onlineReference ? (
+                "Slot reserved for you — finish paying to confirm it"
+              ) : (
+                <>
+                  Slot held for{" "}
+                  <span aria-live="polite" className="tabular-nums font-semibold">
+                    {String(Math.floor(remaining / 60)).padStart(2, "0")}:{String(remaining % 60).padStart(2, "0")}
+                  </span>
+                </>
+              )}
             </p>
             <Button variant="ghost" onClick={releaseAndRestart}>
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -1354,6 +1533,34 @@ export function BookingFlow({
                     <p className="mt-1.5 text-xs text-ink-400">We will confirm your booking on WhatsApp.</p>
                   )}
                 </div>
+                {/* Optional on purpose. Everything that has to happen — the slot,
+                    the confirmation, the receipt — happens without it, and a
+                    required email field on a phone costs more bookings than the
+                    emails are worth. */}
+                <div className="sm:col-span-2">
+                  <label className="field-label" htmlFor="customer-email">
+                    Email <span className="font-normal text-ink-400">(optional)</span>
+                  </label>
+                  <input
+                    id="customer-email"
+                    className="field-input"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    aria-invalid={emailProblem ? true : undefined}
+                    aria-describedby={emailProblem ? "customer-email-error" : undefined}
+                  />
+                  {emailProblem ? (
+                    <FieldError id="customer-email-error">{emailProblem}</FieldError>
+                  ) : (
+                    <p className="mt-1.5 text-xs text-ink-400">
+                      We will email your booking confirmation here. Leave it blank if you would rather not.
+                    </p>
+                  )}
+                </div>
               </div>
 
               {otpEnabled ? (
@@ -1397,7 +1604,7 @@ export function BookingFlow({
                   they reach for the button is the button. */}
               {!detailsValid && (name.length > 0 || phone.length > 0) ? (
                 <p className="mt-4 text-sm font-medium text-amber-300">
-                  {nameProblem ?? phoneProblem ?? "Verify your mobile number to continue."}
+                  {nameProblem ?? phoneProblem ?? emailProblem ?? "Verify your mobile number to continue."}
                 </p>
               ) : null}
 
@@ -1465,12 +1672,122 @@ export function BookingFlow({
                       selected={!payAdvance}
                       onSelect={() => setPayAdvance(false)}
                       title={`Pay ${formatCurrency(hold.amount)} now`}
-                      detail="Nothing left to pay"
+                      detail="Nothing to pay at ground"
                     />
                   </div>
                 </section>
               ) : null}
 
+              {onlinePaymentReady ? (
+                <section className="card" aria-labelledby="method-heading">
+                  <h2 id="method-heading" className="text-lg font-semibold text-white">
+                    How would you like to pay?
+                  </h2>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <PayChoice
+                      selected={method === "RAZORPAY"}
+                      onSelect={() => {
+                        setMethod("RAZORPAY");
+                        setError(null);
+                      }}
+                      title="Card, UPI or netbanking"
+                      detail="Confirmed straight away"
+                    />
+                    <PayChoice
+                      selected={method === "UPI_MANUAL"}
+                      onSelect={() => {
+                        setMethod("UPI_MANUAL");
+                        setError(null);
+                      }}
+                      title="UPI, then send a screenshot"
+                      detail="Confirmed once the team checks it"
+                    />
+                  </div>
+                  {/* Said here rather than discovered later: a booking made this
+                      way sits waiting for a person, and that is a different
+                      promise from the one above it. */}
+                  {method === "UPI_MANUAL" ? (
+                    <p className="mt-3 text-xs text-ink-400">
+                      Your slot stays reserved while the turf team checks your payment, usually within a few minutes.
+                    </p>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {method === "RAZORPAY" ? (
+                <section className="card" aria-labelledby="online-heading">
+                  <h2 id="online-heading" className="text-lg font-semibold text-white">
+                    Pay {formatCurrency(dueNow)} now
+                  </h2>
+                  <p className="mt-1 text-sm text-ink-400">
+                    Card, UPI, netbanking or wallet. Your booking is confirmed the moment the payment goes through —
+                    nothing to upload and nobody to wait for.
+                  </p>
+
+                  <dl className="mt-4 divide-y divide-white/10 text-sm">
+                    <Row label="Name" value={name} />
+                    <Row label="Mobile" value={phone} />
+                    {email.trim() ? <Row label="Email" value={email.trim()} /> : null}
+                    <Row label="Ground" value={hold.locationName} />
+                    <Row label="Booking" value={hold.facilityName} />
+                    <Row label="Date" value={formatBusinessDate(hold.date)} />
+                    <Row label="Time" value={formatRange(hold.startMin, hold.endMin)} />
+                    {hold.overs !== null ? <Row label="Overs" value={`${hold.overs} overs`} /> : null}
+                    {hold.ballTypeName ? <Row label="Ball" value={hold.ballTypeName} /> : null}
+                    <Row label="Paying now" value={formatCurrency(dueNow)} strong />
+                    {dueNow < hold.amount ? (
+                      <Row label="At the ground" value={formatCurrency(hold.amount - dueNow)} />
+                    ) : null}
+                  </dl>
+
+                  {error ? (
+                    <Alert tone={awaitingConfirmation ? "warning" : "error"} className="mt-4">
+                      {error}
+                    </Alert>
+                  ) : null}
+
+                  {/*
+                    Two different buttons, because after a failed confirmation the
+                    right action is emphatically NOT "pay again". Checking asks
+                    Razorpay whether the money arrived and settles it if it did.
+                  */}
+                  {awaitingConfirmation ? (
+                    <>
+                      <Alert tone="warning" className="mt-3">
+                        Your payment may already have gone through. <strong>Do not pay again</strong> — check it here
+                        first.
+                      </Alert>
+                      <Button
+                        className="mt-3 w-full"
+                        size="lg"
+                        disabled={payingOnline}
+                        onClick={() => void checkOnlinePayment()}
+                      >
+                        {payingOnline ? <Spinner /> : null}
+                        {payingOnline ? "Checking…" : "Check my payment"}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        className="mt-4 w-full"
+                        size="lg"
+                        disabled={payingOnline || (holdExpired && !onlineReference)}
+                        onClick={() => void payOnline()}
+                      >
+                        {payingOnline ? <Spinner /> : <CreditCard className="h-4 w-4" aria-hidden="true" />}
+                        {payingOnline ? "Opening payment…" : `Pay ${formatCurrency(dueNow)} securely`}
+                      </Button>
+                      <p className="mt-2 text-center text-xs text-ink-400">
+                        Payments are handled by Razorpay. We never see your card details.
+                      </p>
+                    </>
+                  )}
+                </section>
+              ) : null}
+
+              {method === "UPI_MANUAL" ? (
+              <>
               <section className="card" aria-labelledby="payment-heading">
                 <h2 id="payment-heading" className="text-lg font-semibold text-white">
                   Pay {formatCurrency(dueNow)} by UPI
@@ -1724,6 +2041,8 @@ export function BookingFlow({
                   </p>
                 ) : null}
               </section>
+              </>
+              ) : null}
             </>
           ) : null}
         </>

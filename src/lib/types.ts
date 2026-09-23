@@ -48,6 +48,23 @@ export type ScreenshotUploadStatus = "UPLOADED" | "FAILED" | "NONE";
  */
 export type ScreenshotFailureReason = "STORAGE_UNAVAILABLE";
 
+/**
+ * Where the money in a payment attempt came from.
+ *
+ * MANUAL   — a UPI transfer the customer made themselves and an admin verified,
+ *            or cash the admin recorded. Someone looked at it and decided.
+ * RAZORPAY — taken through the payment gateway and settled server-side against
+ *            Razorpay's own record of it. No human verified anything, and none
+ *            needs to.
+ *
+ * Absent on every attempt written before the gateway existed, which are all
+ * manual — so a missing value reads as MANUAL everywhere.
+ */
+export type PaymentProvider = "MANUAL" | "RAZORPAY";
+
+/** How a booking is being paid for online. Absent for pay-at-venue and staff bookings. */
+export type BookingPaymentMethod = "UPI_MANUAL" | "RAZORPAY";
+
 export interface PaymentAttempt {
   id: string;
   /** Null when an admin recorded the payment themselves, or when the upload failed. */
@@ -87,6 +104,20 @@ export interface PaymentAttempt {
    * and "no screenshot was ever sent".
    */
   screenshotExpiredAt?: Date | null;
+  /** Absent means MANUAL — every attempt written before the gateway existed. */
+  provider?: PaymentProvider;
+  /**
+   * Razorpay's own identifiers for this payment.
+   *
+   * `razorpayPaymentId` is what makes settling a payment happen exactly once: the
+   * browser's success callback and the webhook describe the same payment, arrive
+   * in either order, and whichever is second finds this id already on the booking
+   * and does nothing. It is the idempotency key, not merely a reference.
+   */
+  razorpayOrderId?: string | null;
+  razorpayPaymentId?: string | null;
+  /** upi, card, netbanking, wallet — what the customer actually paid with. */
+  razorpayMethod?: string | null;
 }
 
 export interface LocationDoc {
@@ -323,6 +354,14 @@ export interface BookingDoc {
   customerName: string;
   /** Normalised to 10 digits, no country code. */
   customerPhone: string;
+  /**
+   * Optional, and asked for only so a confirmation can be emailed.
+   *
+   * Deliberately not required: the ground's customers book from a phone with a
+   * thumb, and a mandatory email field costs more bookings than the emails are
+   * worth. Absent simply means no customer copy is sent.
+   */
+  customerEmail?: string | null;
   /** True when an OTP was verified for this number at booking time. */
   phoneVerified: boolean;
   /**
@@ -347,6 +386,31 @@ export interface BookingDoc {
    * PARTIAL, and only this says which one happened.
    */
   amountDueNow?: number;
+  /**
+   * How this booking is paying online. Absent on a pay-at-venue session, on one
+   * staff took over the phone, and on every booking made before the gateway
+   * existed — all of which are manual by definition.
+   *
+   * RAZORPAY is what excuses a booking from arriving with a UTR and a screenshot:
+   * it is created before the money moves and settled when the gateway says the
+   * money moved. Set by the server from its own configuration, never from the
+   * request body, so a client cannot claim it to skip the evidence.
+   */
+  paymentMethod?: BookingPaymentMethod;
+  /**
+   * Every Razorpay order raised for this booking, oldest first.
+   *
+   * An array rather than one id because a customer who abandons checkout and
+   * tries again may be given a fresh order, and a webhook for the abandoned one
+   * can still arrive afterwards — it must still find its booking. This is the
+   * index the webhook looks the booking up by.
+   */
+  razorpayOrderIds?: string[];
+  /**
+   * When the confirmation emails went out. Set once, by whichever request got
+   * there first, so a retried webhook cannot email the customer twice.
+   */
+  confirmationEmailAt?: Date | null;
   /** The most recent screenshot, kept for quick access. */
   paymentScreenshotKey: string | null;
   paymentUploadedAt: Date | null;
@@ -383,6 +447,15 @@ export interface SettingsDoc {
    * which is what keeps the bill at zero until the owner has an SMS account.
    */
   otpEnabled: boolean;
+  /**
+   * Offer card/UPI/netbanking payment through Razorpay at booking time.
+   *
+   * A switch rather than a deploy, for the same reason OTP is one: the gateway
+   * account is the owner's, and if it is suspended or the keys are rotated they
+   * need to fall back to the UPI-screenshot flow in the time it takes to save a
+   * form. Has no effect unless the Razorpay keys are present in the environment.
+   */
+  razorpayEnabled: boolean;
   /** Where "new booking" alerts go. Falls back to supportPhone when blank. */
   notifyPhone: string;
   /** Send an SMS to notifyPhone whenever a booking comes in. */

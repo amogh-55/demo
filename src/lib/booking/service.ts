@@ -37,6 +37,7 @@ import {
 // routes are concerned; they live in schedule.ts because they are pure arithmetic
 // and importing this file drags in the database driver.
 export { advanceFor, isPastSlot };
+import { notifyBookingConfirmed } from "./notify";
 import { generateBookingReference, generateHoldToken, hashHoldToken } from "./reference";
 
 /**
@@ -819,6 +820,19 @@ export interface SubmitBookingInput {
    * sends this for a facility taking no advance simply pays in full.
    */
   payAdvance?: boolean;
+  /**
+   * How the customer is paying online.
+   *
+   * RAZORPAY is the one value that excuses a booking from arriving with a UTR and
+   * a screenshot, because with the gateway the booking is made BEFORE the money
+   * moves and settled when Razorpay says it did. It is therefore resolved by the
+   * route from this server's own configuration and the owner's own switch, never
+   * copied out of the request body — a client that could assert it would be a
+   * client that could book without paying or proving anything.
+   */
+  paymentMethod?: "UPI_MANUAL" | "RAZORPAY";
+  /** Optional. Only ever used to email a confirmation. */
+  customerEmail?: string | null;
   now?: Date;
 }
 
@@ -897,8 +911,16 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   // a booking cannot be made without. Staff writing in a phone booking are past
   // this entirely — they are standing next to the till.
   const payAtVenue = isPayAtVenue(config, overs);
-  const utr = bookedBy ? null : (input.utr ?? null);
-  if (!bookedBy && !payAtVenue && !utr) {
+  /*
+   * A gateway booking is the other way round from a UPI one: it is created first,
+   * with nothing paid, and the money is settled against it afterwards from
+   * Razorpay's own record. So there is no reference to demand and no image to ask
+   * for — the booking simply sits PENDING, holding its slots, until the payment
+   * lands or the reclaim sweep takes them back.
+   */
+  const byGateway = !bookedBy && !payAtVenue && input.paymentMethod === "RAZORPAY";
+  const utr = bookedBy || byGateway ? null : (input.utr ?? null);
+  if (!bookedBy && !payAtVenue && !byGateway && !utr) {
     throw appError("VALIDATION", "Please enter the 12-digit UPI reference number (UTR) to finish booking.");
   }
 
@@ -912,8 +934,8 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
    * client cannot assert it, and a file the customer chose badly never produces
    * one, so the exemption cannot be reached by uploading rubbish on purpose.
    */
-  const storageFailed = !bookedBy && !payAtVenue && Boolean(input.storageFailed);
-  if (!bookedBy && !payAtVenue && !input.paymentScreenshotKey && !storageFailed) {
+  const storageFailed = !bookedBy && !payAtVenue && !byGateway && Boolean(input.storageFailed);
+  if (!bookedBy && !payAtVenue && !byGateway && !input.paymentScreenshotKey && !storageFailed) {
     throw appError(
       "VALIDATION",
       "Please upload a screenshot of your payment to finish booking.",
@@ -937,6 +959,9 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   const advance = advanceFor(config, amount);
   const amountDueNow = !bookedBy && !payAtVenue && input.payAdvance && advance > 0 ? advance : amount;
   const unitStarts = units.map((u) => u.startMin);
+  // A gateway booking has no screenshot by definition, so one sent alongside it is
+  // ignored rather than filed against a payment that has not happened yet.
+  const screenshotKey = byGateway ? null : input.paymentScreenshotKey;
 
   // Retry only for the (vanishingly rare) reference collision.
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -962,6 +987,7 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       priceBreakdown,
       customerName: input.customerName,
       customerPhone: input.customerPhone,
+      customerEmail: input.customerEmail ?? null,
       phoneVerified: input.verifiedPhone === input.customerPhone,
       createdBy: bookedBy,
       // A pay-at-venue session is confirmed immediately: there is nothing for an
@@ -978,12 +1004,13 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
         ? [
             {
               id: crypto.randomUUID(),
-              screenshotKey: input.paymentScreenshotKey,
+              screenshotKey,
               // Recorded rather than inferred from a null key: "the provider was
               // down" and "there was never an image" are the same absence and
               // completely different problems for whoever checks this later.
-              uploadStatus: input.paymentScreenshotKey ? "UPLOADED" : storageFailed ? "FAILED" : "NONE",
-              uploadFailureReason: !input.paymentScreenshotKey && storageFailed ? "STORAGE_UNAVAILABLE" : null,
+              uploadStatus: screenshotKey ? "UPLOADED" : storageFailed ? "FAILED" : "NONE",
+              uploadFailureReason: !screenshotKey && storageFailed ? "STORAGE_UNAVAILABLE" : null,
+              provider: "MANUAL",
               utr,
               uploadedAt: now,
               amount: null,
@@ -996,8 +1023,14 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
         : [],
       amountPaid: 0,
       amountDueNow,
-      paymentScreenshotKey: input.paymentScreenshotKey,
-      paymentUploadedAt: input.paymentScreenshotKey ? now : null,
+      /*
+       * Absent on anything that is not being paid for online right now, which is
+       * how every screen tells a gateway booking apart from a UPI one without
+       * inspecting the payments array.
+       */
+      ...(bookedBy || payAtVenue ? {} : { paymentMethod: byGateway ? ("RAZORPAY" as const) : ("UPI_MANUAL" as const) }),
+      paymentScreenshotKey: screenshotKey,
+      paymentUploadedAt: screenshotKey ? now : null,
       rejectionReason: null,
       holdTokenHash,
       timeline: bookedBy
@@ -1010,15 +1043,25 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
               { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
               { event: "BOOKING_CONFIRMED", at: now, by: "system", note: "Paying at the ground" },
             ]
-          : [
-              { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
-              {
-                event: input.paymentScreenshotKey ? "PAYMENT_SCREENSHOT_UPLOADED" : "PAYMENT_UTR_ENTERED",
-                at: now,
-                by: "customer",
-                note: "UTR " + utr,
-              },
-            ],
+          : byGateway
+            ? [
+                { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
+                {
+                  event: "ONLINE_PAYMENT_STARTED",
+                  at: now,
+                  by: "customer",
+                  note: `Paying ${amountDueNow} online by card/UPI`,
+                },
+              ]
+            : [
+                { event: "BOOKING_SUBMITTED", at: now, by: "customer" },
+                {
+                  event: screenshotKey ? "PAYMENT_SCREENSHOT_UPLOADED" : "PAYMENT_UTR_ENTERED",
+                  at: now,
+                  by: "customer",
+                  note: "UTR " + utr,
+                },
+              ],
       createdAt: now,
       updatedAt: now,
     };
@@ -1049,6 +1092,10 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       });
 
       log.info("booking_submitted", { reference, resourceId: resourceId.toHexString(), date, startMin, endMin, amount });
+      // Pay-at-the-ground and phone bookings are confirmed in the same breath as
+      // they are made, so this is their only chance at a confirmation email.
+      // Never awaited: a mail provider must not be able to fail a booking.
+      if (booking.status === "CONFIRMED") void notifyBookingConfirmed(booking).catch(() => {});
       return booking;
     } catch (err) {
       if (isDuplicateKeyError(err) && attempt < 4) continue; // reference collision — try another
@@ -1189,7 +1236,7 @@ function timelineEntry(event: string, by: string, note?: string): BookingTimelin
  * the status rules have exactly one definition — an admin recording a payment by
  * hand must land in the same place as one read off a screenshot.
  */
-function paymentRollupStages(now: Date) {
+export function paymentRollupStages(now: Date) {
   return [
     {
       $set: {
@@ -1523,7 +1570,7 @@ export async function addPaymentAttempt(input: {
 export async function confirmBooking(bookingId: ObjectId, admin: { username: string }): Promise<BookingDoc> {
   const now = new Date();
 
-  return withTransaction(async (session, txDb) => {
+  const confirmed = await withTransaction(async (session, txDb) => {
     const booking = await collections.bookings(txDb).findOne({ _id: bookingId }, { session });
     if (!booking) throw appError("NOT_FOUND", "That booking no longer exists.");
     if (booking.status === "CONFIRMED") return booking; // idempotent
@@ -1571,6 +1618,18 @@ export async function confirmBooking(bookingId: ObjectId, admin: { username: str
     log.info("booking_confirmed", { reference: updated.reference, admin: admin.username });
     return updated;
   });
+
+  /*
+   * Outside the transaction, and never awaited.
+   *
+   * Inside it, an HTTPS call to a mail provider would hold a MongoDB transaction
+   * — and its locks on the slot units — open for as long as that provider felt
+   * like taking, which is how a slow third party becomes a booking outage. The
+   * send is idempotent on its own, so an already-confirmed booking confirmed
+   * again emails nobody twice.
+   */
+  void notifyBookingConfirmed(confirmed).catch(() => {});
+  return confirmed;
 }
 
 /**

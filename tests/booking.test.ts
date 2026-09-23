@@ -89,10 +89,12 @@ function pastDate(daysBack = 2): string {
 
 type Db = Awaited<ReturnType<typeof import("../src/lib/db")["getDb"]>>;
 type Service = typeof import("../src/lib/booking/service");
+type Online = typeof import("../src/lib/booking/online-payment");
 type Collections = typeof import("../src/lib/db")["collections"];
 
 let db: Db;
 let service: Service;
+let online: Online;
 let collections: Collections;
 let closeClient: () => Promise<void>;
 
@@ -123,6 +125,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
   before(async () => {
     const dbModule = await import("../src/lib/db");
     service = await import("../src/lib/booking/service");
+    online = await import("../src/lib/booking/online-payment");
     collections = dbModule.collections;
     db = await dbModule.getDb();
     closeClient = () => dbModule.getMongoClient().close();
@@ -2604,6 +2607,313 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       for (const unit of units.filter((u) => u.status === "PENDING" || u.status === "BOOKED")) {
         assert.ok(unit.bookingId, "a taken slot must always name its booking");
       }
+    });
+  });
+
+  /* ── Online payment (Razorpay) ───────────────────────────────────────── */
+
+  /**
+   * The gateway path, against the real database rather than a mock.
+   *
+   * What is proved here is not that Razorpay works — that is their problem — but
+   * that money arriving twice, late, or for a booking that has already died lands
+   * somewhere sensible. Those are the cases that cost a customer their slot or the
+   * owner a refund, and none of them can be checked without the concurrency
+   * machinery underneath.
+   *
+   * Razorpay's HTTP API is never called: every function under test takes the
+   * payment as data, exactly as the webhook and the success callback hand it over.
+   */
+  describe("online payment", () => {
+    /** A booking made the way the gateway makes one: no UTR, no screenshot, PENDING. */
+    async function gatewayBooking(input: { startMin?: number; payAdvance?: boolean; date?: string } = {}) {
+      const on = input.date ?? futureDate(21);
+      const startMin = input.startMin ?? 1020;
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date: on, startMin, endMin: startMin + 60 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        paymentMethod: "RAZORPAY",
+        payAdvance: input.payAdvance,
+      });
+      // The order id would normally be written by startOnlinePayment, which talks
+      // to Razorpay. Written directly here so the settle path is tested on its
+      // own, which is the half that matters.
+      const orderId = `order_${booking.reference}`;
+      await collections.bookings(db).updateOne({ _id: booking._id }, { $push: { razorpayOrderIds: orderId } });
+      return { booking, orderId };
+    }
+
+    const payment = (orderId: string, rupees: number, paymentId = "pay_TEST001") => ({
+      paymentId,
+      orderId,
+      amountPaise: rupees * 100,
+      method: "upi",
+      rrn: "123456789012",
+    });
+
+    it("creates the booking without a UTR or a screenshot, and takes no money yet", async () => {
+      const { booking } = await gatewayBooking();
+      assert.equal(booking.status, "PENDING");
+      assert.equal(booking.paymentMethod, "RAZORPAY");
+      assert.equal(booking.amountPaid, 0);
+      assert.equal(booking.payments.length, 0, "nothing is in the admin queue yet");
+
+      // The slots are already this customer's, which is the whole point of
+      // creating the booking before the money moves.
+      const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
+      assert.equal(units.length, 1);
+      assert.equal(units[0]!.status, "PENDING");
+    });
+
+    it("still demands a UTR from a manual UPI booking", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(22),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: null,
+            paymentMethod: "UPI_MANUAL",
+          }),
+        /UPI reference/i,
+      );
+    });
+
+    it("confirms the booking and books the slots when the full amount is captured", async () => {
+      const { booking, orderId } = await gatewayBooking();
+      const settled = await online.settleRazorpayPayment(payment(orderId, booking.amount), "checkout");
+
+      assert.ok(settled);
+      assert.equal(settled.status, "CONFIRMED");
+      assert.equal(settled.paymentVerificationStatus, "VERIFIED");
+      assert.equal(settled.amountPaid, booking.amount);
+
+      const attempt = settled.payments[0]!;
+      assert.equal(attempt.status, "ACCEPTED");
+      assert.equal(attempt.provider, "RAZORPAY");
+      assert.equal(attempt.razorpayPaymentId, "pay_TEST001");
+      assert.equal(attempt.utr, "123456789012", "the UPI reference lands where the owner looks for it");
+
+      const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
+      assert.ok(units.every((u) => u.status === "BOOKED"));
+    });
+
+    /**
+     * The success callback and the webhook describe the same payment and arrive
+     * within about a second of each other, every single time. Counting it twice
+     * would mark a half-paid booking as paid in full.
+     */
+    it("counts one payment once, however many times it is reported", async () => {
+      const { booking, orderId } = await gatewayBooking();
+      const results = [
+        await online.settleRazorpayPayment(payment(orderId, booking.amount), "checkout"),
+        await online.settleRazorpayPayment(payment(orderId, booking.amount), "webhook"),
+        await online.settleRazorpayPayment(payment(orderId, booking.amount), "webhook"),
+      ];
+      for (const result of results) {
+        assert.equal(result!.amountPaid, booking.amount);
+        assert.equal(result!.payments.length, 1, "one payment, one attempt");
+        assert.equal(result!.status, "CONFIRMED");
+      }
+    });
+
+    it("survives both reports arriving at the same moment", async () => {
+      const { booking, orderId } = await gatewayBooking();
+      const results = await Promise.all([
+        online.settleRazorpayPayment(payment(orderId, booking.amount), "checkout"),
+        online.settleRazorpayPayment(payment(orderId, booking.amount), "webhook"),
+      ]);
+      for (const result of results) assert.equal(result!.status, "CONFIRMED");
+
+      const stored = await collections.bookings(db).findOne({ _id: booking._id });
+      assert.equal(stored!.payments.length, 1);
+      assert.equal(stored!.amountPaid, booking.amount);
+    });
+
+    /** Two genuinely different payments DO both count — idempotency is per payment id. */
+    it("counts two different payments separately", async () => {
+      const { booking, orderId } = await gatewayBooking();
+      await online.settleRazorpayPayment(payment(orderId, 300, "pay_A"), "webhook");
+      const after = await online.settleRazorpayPayment(payment(orderId, booking.amount - 300, "pay_B"), "webhook");
+      assert.equal(after!.payments.length, 2);
+      assert.equal(after!.amountPaid, booking.amount);
+    });
+
+    /**
+     * The case from the brief: pay half now, the rest at the ground. The BOOKING
+     * is confirmed; the PAYMENT is not. Those two statuses disagreeing on purpose
+     * is the entire feature.
+     */
+    it("confirms an advance booking while leaving the payment PARTIAL", async () => {
+      await collections.facilities(db).updateOne({ _id: FACILITY_ID }, { $set: { "config.advancePercent": 50 } });
+      service.forgetResourceContext(RESOURCE_ID);
+      try {
+        const { booking, orderId } = await gatewayBooking({ payAdvance: true, startMin: 1140 });
+        assert.equal(booking.amountDueNow, booking.amount / 2);
+
+        const settled = await online.settleRazorpayPayment(payment(orderId, booking.amountDueNow!), "checkout");
+        assert.equal(settled!.status, "CONFIRMED", "the slot is theirs once the advance is in");
+        assert.equal(settled!.paymentVerificationStatus, "PARTIAL");
+        assert.equal(settled!.amountPaid, booking.amount / 2);
+
+        // The balance, handed over at the gate. The same path the owner uses for cash.
+        const paid = await service.recordManualPayment({
+          bookingId: booking._id,
+          amount: booking.amount / 2,
+          note: "Balance collected at the ground",
+          admin: ADMIN,
+        });
+        assert.equal(paid.status, "CONFIRMED");
+        assert.equal(paid.paymentVerificationStatus, "VERIFIED");
+        assert.equal(paid.amountPaid, booking.amount);
+        assert.equal(paid.payments.length, 2, "the gateway payment is never overwritten");
+        assert.equal(paid.payments[0]!.provider, "RAZORPAY");
+        assert.equal(paid.payments[0]!.razorpayPaymentId, "pay_TEST001");
+      } finally {
+        await collections.facilities(db).updateOne({ _id: FACILITY_ID }, { $set: { "config.advancePercent": 0 } });
+        service.forgetResourceContext(RESOURCE_ID);
+      }
+    });
+
+    /** Short of the amount due is still short: the slot is not theirs yet. */
+    it("leaves a booking pending when less than the amount due arrives", async () => {
+      const { booking, orderId } = await gatewayBooking({ startMin: 1200 });
+      const settled = await online.settleRazorpayPayment(payment(orderId, booking.amount - 100), "webhook");
+      assert.equal(settled!.status, "PENDING");
+      assert.equal(settled!.paymentVerificationStatus, "PARTIAL");
+
+      const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
+      assert.ok(units.every((u) => u.status === "PENDING"), "the slots stay reserved while it is chased");
+    });
+
+    it("does nothing at all with a payment for an order it has never heard of", async () => {
+      const before = await collections.bookings(db).countDocuments({});
+      const settled = await online.settleRazorpayPayment(payment("order_NOT_OURS", 700), "webhook");
+      assert.equal(settled, null, "a webhook must never be able to create a booking");
+      assert.equal(await collections.bookings(db).countDocuments({}), before);
+    });
+
+    /**
+     * Money arriving a moment after the slots were released. It is recorded rather
+     * than discarded — it really happened and somebody is owed a refund — and the
+     * booking is emphatically not resurrected.
+     */
+    it("records a payment on a rejected booking without giving the slots back", async () => {
+      const { booking, orderId } = await gatewayBooking({ startMin: 1260 });
+      await service.rejectBooking(booking._id, "Online payment was not completed", { username: "system" });
+
+      const settled = await online.settleRazorpayPayment(payment(orderId, booking.amount), "webhook");
+      assert.equal(settled!.status, "REJECTED");
+      assert.equal(settled!.amountPaid, booking.amount, "the money is on the record for the refund");
+
+      const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
+      assert.equal(units.length, 0, "a late payment must not re-take a slot somebody else may now have");
+    });
+
+    it("refuses to raise a charge for a booking that is not paying online", async () => {
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(23),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      const manual = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      await assert.rejects(() => online.startOnlinePayment(manual), /not set up for online payment/i);
+    });
+
+    it("refuses to raise a charge for a booking that is already confirmed", async () => {
+      const { booking, orderId } = await gatewayBooking({ date: futureDate(24) });
+      const settled = await online.settleRazorpayPayment(payment(orderId, booking.amount), "checkout");
+      await assert.rejects(() => online.startOnlinePayment(settled!), /already confirmed/i);
+    });
+  });
+
+  /* ── Reclaiming abandoned checkouts ──────────────────────────────────── */
+
+  describe("abandoned online payments", () => {
+    /** A gateway booking, back-dated by `minutes` so the sweep can see it. */
+    async function abandoned(minutes: number, startMin: number, on: string) {
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date: on, startMin, endMin: startMin + 60 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        paymentMethod: "RAZORPAY",
+      });
+      await collections
+        .bookings(db)
+        .updateOne({ _id: booking._id }, { $set: { createdAt: new Date(Date.now() - minutes * 60_000) } });
+      return booking;
+    }
+
+    it("gives the slots back once the grace period has passed", async () => {
+      const on = futureDate(25);
+      const booking = await abandoned(online.ONLINE_PAYMENT_GRACE_MINUTES + 5, 1020, on);
+      assert.equal(await online.reclaimAbandonedOnlinePayments({ resourceId: RESOURCE_ID, date: on }), 1);
+
+      const after = await collections.bookings(db).findOne({ _id: booking._id });
+      assert.equal(after!.status, "REJECTED");
+
+      // Free again, which is the only reason any of this exists.
+      const availability = await service.getAvailability(RESOURCE_ID, on);
+      assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
+    });
+
+    /** Somebody thirty seconds into typing a card number has not abandoned anything. */
+    it("leaves a checkout that is still in progress alone", async () => {
+      const on = futureDate(25);
+      const booking = await abandoned(2, 1140, on);
+      assert.equal(await online.reclaimAbandonedOnlinePayments({ resourceId: RESOURCE_ID, date: on }), 0);
+      assert.equal((await collections.bookings(db).findOne({ _id: booking._id }))!.status, "PENDING");
+    });
+
+    /** A paid booking is not abandoned, however long ago it was made. */
+    it("never touches a booking that has money against it", async () => {
+      const on = futureDate(25);
+      const booking = await abandoned(online.ONLINE_PAYMENT_GRACE_MINUTES + 60, 1200, on);
+      await collections.bookings(db).updateOne({ _id: booking._id }, { $push: { razorpayOrderIds: "order_PAID" } });
+      await online.settleRazorpayPayment(
+        { paymentId: "pay_PAID", orderId: "order_PAID", amountPaise: booking.amount * 100 },
+        "webhook",
+      );
+
+      assert.equal(await online.reclaimAbandonedOnlinePayments({ resourceId: RESOURCE_ID, date: on }), 0);
+      assert.equal((await collections.bookings(db).findOne({ _id: booking._id }))!.status, "CONFIRMED");
+    });
+
+    /** A manual UPI booking waits for a human, for as long as that takes. */
+    it("never reclaims a booking that is waiting for an admin to check a screenshot", async () => {
+      const on = futureDate(26);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date: on, startMin: 1020, endMin: 1080 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      await collections
+        .bookings(db)
+        .updateOne({ _id: booking._id }, { $set: { createdAt: new Date(Date.now() - 86_400_000) } });
+
+      assert.equal(await online.reclaimAbandonedOnlinePayments({ resourceId: RESOURCE_ID, date: on }), 0);
+      assert.equal((await collections.bookings(db).findOne({ _id: booking._id }))!.status, "PENDING");
     });
   });
 });

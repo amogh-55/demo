@@ -18,6 +18,7 @@ export async function GET() {
         upiPayeeName: settings.upiPayeeName,
         upiQrImageUrl: settings.upiQrImageUrl,
         otpEnabled: settings.otpEnabled,
+        razorpayEnabled: settings.razorpayEnabled,
         notifyPhone: settings.notifyPhone,
         notifyOnNewBooking: settings.notifyOnNewBooking,
       },
@@ -37,7 +38,11 @@ export async function PUT(request: Request) {
     // owner's money, so who did it and when belongs in the audit trail.
     return ok({
       saved: true,
-      settings: { otpEnabled: saved.otpEnabled, notifyOnNewBooking: saved.notifyOnNewBooking },
+      settings: {
+        otpEnabled: saved.otpEnabled,
+        razorpayEnabled: saved.razorpayEnabled,
+        notifyOnNewBooking: saved.notifyOnNewBooking,
+      },
     });
   } catch (err) {
     return fail(err, { route: "PUT /api/admin/settings" });

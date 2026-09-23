@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getSettings } from "@/lib/settings";
+import { razorpayConfigured, razorpayLiveMode, razorpayWebhookConfigured } from "@/lib/razorpay";
 import { smsConfigured } from "@/lib/sms";
 import { SettingsForm } from "@/components/admin/settings-form";
 
@@ -14,11 +15,16 @@ export default async function AdminSettingsPage() {
     <div className="mx-auto max-w-3xl space-y-4">
       <div>
         <h1 className="text-xl font-bold text-ink-900">Settings</h1>
-        <p className="text-sm text-ink-600">Business details, UPI payment information and SMS.</p>
+        <p className="text-sm text-ink-600">Business details, payment information and SMS.</p>
       </div>
 
       <SettingsForm
         smsReady={smsConfigured()}
+        razorpay={{
+          ready: razorpayConfigured(),
+          webhookReady: razorpayWebhookConfigured(),
+          live: razorpayLiveMode(),
+        }}
         initial={{
           businessName: settings.businessName,
           supportPhone: settings.supportPhone,
@@ -27,6 +33,7 @@ export default async function AdminSettingsPage() {
           upiPayeeName: settings.upiPayeeName,
           upiQrImageUrl: settings.upiQrImageUrl,
           otpEnabled: settings.otpEnabled,
+          razorpayEnabled: settings.razorpayEnabled,
           notifyPhone: settings.notifyPhone,
           notifyOnNewBooking: settings.notifyOnNewBooking,
         }}

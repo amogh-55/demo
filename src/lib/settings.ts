@@ -19,6 +19,9 @@ export const defaultSettings = (): Omit<SettingsDoc, "_id"> => ({
   // Both default OFF. Every SMS costs the owner money, so nothing sends until
   // they have an account and switch it on deliberately.
   otpEnabled: false,
+  // Off until the owner has a Razorpay account they have actually tested. The
+  // manual UPI flow is what runs meanwhile, exactly as it always has.
+  razorpayEnabled: false,
   notifyPhone: "",
   notifyOnNewBooking: false,
   updatedAt: new Date(),
