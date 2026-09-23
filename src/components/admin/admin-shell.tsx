@@ -22,6 +22,16 @@ const NAV = [
   { href: "/admin/settings", label: "Settings", short: "Settings", icon: Settings },
 ];
 
+/**
+ * The same five tabs, with Bookings moved to the middle.
+ *
+ * Only on the phone bar, and only because of the thumb: the centre of a
+ * five-column bar is the easiest target one-handed, and Bookings is the tab the
+ * owner opens all day. A sidebar has no middle worth competing for, so it keeps
+ * the reading order above.
+ */
+const MOBILE_NAV = [NAV[0]!, NAV[2]!, NAV[1]!, NAV[3]!, NAV[4]!];
+
 /** Sidebar on desktop, bottom tab bar on phones — the owner reviews bookings on mobile. */
 export function AdminShell({ session, children }: { session: AdminSessionView; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -131,9 +141,11 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
 
         <nav
           className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-ink-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
-          aria-label="Admin sections"
+          // Named apart from the sidebar: two landmarks called the same thing give
+          // a screen reader user two identical entries and no way to tell them apart.
+          aria-label="Admin sections, bottom bar"
         >
-          {NAV.map((item) => {
+          {MOBILE_NAV.map((item) => {
             const on = isActive(item.href);
             const loading = pendingHref === item.href;
             return (

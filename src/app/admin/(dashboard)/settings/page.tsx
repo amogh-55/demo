@@ -34,6 +34,7 @@ export default async function AdminSettingsPage() {
           upiQrImageUrl: settings.upiQrImageUrl,
           otpEnabled: settings.otpEnabled,
           razorpayEnabled: settings.razorpayEnabled,
+          upiScreenshotEnabled: settings.upiScreenshotEnabled,
           notifyPhone: settings.notifyPhone,
           notifyOnNewBooking: settings.notifyOnNewBooking,
         }}

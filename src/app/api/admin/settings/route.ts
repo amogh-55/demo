@@ -19,6 +19,7 @@ export async function GET() {
         upiQrImageUrl: settings.upiQrImageUrl,
         otpEnabled: settings.otpEnabled,
         razorpayEnabled: settings.razorpayEnabled,
+        upiScreenshotEnabled: settings.upiScreenshotEnabled,
         notifyPhone: settings.notifyPhone,
         notifyOnNewBooking: settings.notifyOnNewBooking,
       },
@@ -41,6 +42,7 @@ export async function PUT(request: Request) {
       settings: {
         otpEnabled: saved.otpEnabled,
         razorpayEnabled: saved.razorpayEnabled,
+        upiScreenshotEnabled: saved.upiScreenshotEnabled,
         notifyOnNewBooking: saved.notifyOnNewBooking,
       },
     });

@@ -833,6 +833,16 @@ export interface SubmitBookingInput {
   paymentMethod?: "UPI_MANUAL" | "RAZORPAY";
   /** Optional. Only ever used to email a confirmation. */
   customerEmail?: string | null;
+  /**
+   * Whether the pay-by-UPI-and-send-a-screenshot route is still on offer.
+   *
+   * Resolved by the route from the owner's switch AND whether the gateway can
+   * actually take a payment — false only when there is a working alternative, so
+   * this can never leave a customer with no way to pay. Pay-at-the-ground
+   * sessions and staff bookings are past it entirely; they are not paying online
+   * either way.
+   */
+  allowManualPayment?: boolean;
   now?: Date;
 }
 
@@ -919,6 +929,12 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
    * lands or the reclaim sweep takes them back.
    */
   const byGateway = !bookedBy && !payAtVenue && input.paymentMethod === "RAZORPAY";
+  if (!bookedBy && !payAtVenue && !byGateway && input.allowManualPayment === false) {
+    throw appError(
+      "CONFLICT",
+      "Payment screenshots are not being accepted at the moment. Please pay online to finish your booking.",
+    );
+  }
   const utr = bookedBy || byGateway ? null : (input.utr ?? null);
   if (!bookedBy && !payAtVenue && !byGateway && !utr) {
     throw appError("VALIDATION", "Please enter the 12-digit UPI reference number (UTR) to finish booking.");

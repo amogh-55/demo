@@ -7,6 +7,26 @@ export type SlotStatus = "AVAILABLE" | "HELD" | "PENDING" | "BOOKED" | "BLOCKED"
 export type PublicSlotStatus = SlotStatus | "PAST";
 
 export type BookingStatus = "PENDING" | "CONFIRMED" | "REJECTED" | "CANCELLED" | "EXPIRED";
+
+/**
+ * The five piles the owner sorts bookings into on the admin screen.
+ *
+ * Lives here rather than beside the query that uses it because the tab strip is a
+ * client component, and the query module is server-only — importing it into the
+ * browser bundle would fail the build.
+ *
+ * "verify" is the one that is not a status: it means "somebody sent money and is
+ * waiting on me", which is the actual job of that screen.
+ */
+export type BookingTab = "all" | "pending" | "verify" | "confirmed" | "rejected";
+
+export const BOOKING_TABS: ReadonlyArray<{ id: BookingTab; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "pending", label: "Pending" },
+  { id: "verify", label: "To verify" },
+  { id: "confirmed", label: "Confirmed" },
+  { id: "rejected", label: "Rejected" },
+];
 /**
  * PARTIAL is the case that matters in practice: the customer paid something, but
  * less than the booking costs. The slots stay reserved while the balance is
@@ -456,6 +476,17 @@ export interface SettingsDoc {
    * form. Has no effect unless the Razorpay keys are present in the environment.
    */
   razorpayEnabled: boolean;
+  /**
+   * Offer the pay-by-UPI-and-send-a-screenshot route alongside the gateway.
+   *
+   * Turning it off leaves online payment as the only way to book, which is what
+   * the owner wants once the gateway is trusted: no screenshots to squint at.
+   *
+   * It is deliberately NOT honoured when the gateway is unavailable — no keys, or
+   * the switch above turned off. A site that offers no way to pay at all is worse
+   * than one showing an option the owner would rather retire, so this yields.
+   */
+  upiScreenshotEnabled: boolean;
   /** Where "new booking" alerts go. Falls back to supportPhone when blank. */
   notifyPhone: string;
   /** Send an SMS to notifyPhone whenever a booking comes in. */

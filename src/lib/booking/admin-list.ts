@@ -2,14 +2,33 @@ import "server-only";
 import { ObjectId, type Filter } from "mongodb";
 import { collections, getDb } from "@/lib/db";
 import { isValidBusinessDate } from "@/lib/time";
-import type { BookingDoc, BookingStatus, PaymentStatus } from "@/lib/types";
+import { BOOKING_TABS, type BookingDoc, type BookingStatus, type BookingTab, type PaymentStatus } from "@/lib/types";
 
 export const BOOKINGS_PAGE_SIZE = 20;
+
+function tabFilter(tab: BookingTab): Filter<BookingDoc> {
+  switch (tab) {
+    case "pending":
+      return { status: "PENDING" };
+    /** A payment attempt nobody has ruled on yet — the queue, in other words. */
+    case "verify":
+      return { "payments.status": "PENDING" };
+    case "confirmed":
+      return { status: "CONFIRMED" };
+    // Grouped: from the owner's side a rejected, cancelled and expired booking are
+    // one thing — a slot that went back on sale.
+    case "rejected":
+      return { status: { $in: ["REJECTED", "CANCELLED", "EXPIRED"] } };
+    default:
+      return {};
+  }
+}
 
 export interface AdminBookingsQuery {
   page: number;
   locationId?: string;
   date?: string;
+  tab?: BookingTab;
   status?: BookingStatus;
   payment?: PaymentStatus;
   search?: string;
@@ -23,17 +42,22 @@ export interface AdminBookingsQuery {
  * paint and the first refresh to disagree about what the owner is looking at.
  */
 export async function listBookings(query: AdminBookingsQuery) {
-  const filter: Filter<BookingDoc> = {};
-  if (query.locationId && ObjectId.isValid(query.locationId)) filter.locationId = new ObjectId(query.locationId);
-  if (query.date && isValidBusinessDate(query.date)) filter.date = query.date;
-  if (query.status) filter.status = query.status;
-  if (query.payment) filter.paymentVerificationStatus = query.payment;
+  /**
+   * Everything EXCEPT the tab: which ground, which day, what was searched for.
+   *
+   * Kept separate because the tab counts are taken against this rather than
+   * against the whole filter — a "Pending 3" that changes to "Pending 0" the
+   * moment you open the Pending tab would be useless.
+   */
+  const scope: Filter<BookingDoc> = {};
+  if (query.locationId && ObjectId.isValid(query.locationId)) scope.locationId = new ObjectId(query.locationId);
+  if (query.date && isValidBusinessDate(query.date)) scope.date = query.date;
 
   if (query.search) {
     const term = query.search.trim();
     const digits = term.replace(/\D/g, "");
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    filter.$or = [
+    scope.$or = [
       { reference: new RegExp(`^${escaped}`, "i") },
       { customerName: new RegExp(escaped, "i") },
       ...(digits.length >= 4 ? [{ customerPhone: new RegExp(digits.slice(-10)) }] : []),
@@ -43,6 +67,13 @@ export async function listBookings(query: AdminBookingsQuery) {
     ];
   }
 
+  const tab: BookingTab = query.tab ?? "all";
+  // `status` and `payment` are still honoured so a bookmarked or shared link from
+  // before the tabs existed keeps working.
+  const filter: Filter<BookingDoc> = { ...scope, ...tabFilter(tab) };
+  if (query.status) filter.status = query.status;
+  if (query.payment) filter.paymentVerificationStatus = query.payment;
+
   const db = await getDb();
   const cursor = collections
     .bookings(db)
@@ -51,7 +82,11 @@ export async function listBookings(query: AdminBookingsQuery) {
     .skip((query.page - 1) * BOOKINGS_PAGE_SIZE)
     .limit(BOOKINGS_PAGE_SIZE);
 
-  const [bookings, total] = await Promise.all([cursor.toArray(), collections.bookings(db).countDocuments(filter)]);
+  const [bookings, total, counts] = await Promise.all([
+    cursor.toArray(),
+    collections.bookings(db).countDocuments(filter),
+    tabCounts(db, scope),
+  ]);
 
   return {
     bookings: bookings.map(serialiseForList),
@@ -59,7 +94,34 @@ export async function listBookings(query: AdminBookingsQuery) {
     pageSize: BOOKINGS_PAGE_SIZE,
     total,
     totalPages: Math.max(1, Math.ceil(total / BOOKINGS_PAGE_SIZE)),
+    tab,
+    counts,
   };
+}
+
+/**
+ * How many bookings sit behind each tab, in one round trip.
+ *
+ * A `$facet` rather than five `countDocuments` calls: the tabs are read on every
+ * keystroke of the search box, and five queries per keystroke is five times the
+ * load for a number that is only ever glanced at.
+ */
+async function tabCounts(
+  db: Awaited<ReturnType<typeof getDb>>,
+  scope: Filter<BookingDoc>,
+): Promise<Record<BookingTab, number>> {
+  const facet = Object.fromEntries(
+    BOOKING_TABS.map((t) => [t.id, [{ $match: tabFilter(t.id) }, { $count: "n" }]]),
+  );
+  const [result] = await collections
+    .bookings(db)
+    .aggregate<Record<string, Array<{ n: number }>>>([{ $match: scope }, { $facet: facet }])
+    .toArray();
+
+  return Object.fromEntries(BOOKING_TABS.map((t) => [t.id, result?.[t.id]?.[0]?.n ?? 0])) as Record<
+    BookingTab,
+    number
+  >;
 }
 
 export type AdminBookingList = Awaited<ReturnType<typeof listBookings>>;

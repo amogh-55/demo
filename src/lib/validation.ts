@@ -489,6 +489,8 @@ export const settingsSchema = z.object({
   otpEnabled: z.boolean().default(false),
   /** Has no effect without Razorpay keys in the environment; the form says so. */
   razorpayEnabled: z.boolean().default(false),
+  /** Ignored while the gateway is unavailable — see SettingsDoc. */
+  upiScreenshotEnabled: z.boolean().default(true),
   /** Blank is allowed and means "use the support number". */
   notifyPhone: z.union([z.literal(""), phoneSchema]).default(""),
   notifyOnNewBooking: z.boolean().default(false),
@@ -497,6 +499,8 @@ export const settingsSchema = z.object({
 export const adminBookingsQuerySchema = z.object({
   locationId: z.string().optional(),
   date: z.string().optional(),
+  /** Which pile of bookings to show. See BOOKING_TABS — "verify" is the review queue. */
+  tab: z.enum(["all", "pending", "verify", "confirmed", "rejected"]).optional(),
   status: z.enum(["PENDING", "CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"]).optional(),
   payment: z.enum(["PENDING", "PARTIAL", "VERIFIED", "REJECTED"]).optional(),
   search: z.string().trim().max(60).optional(),

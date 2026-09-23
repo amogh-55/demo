@@ -1,13 +1,22 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ExternalLink, Image as ImageIcon, Search, SlidersHorizontal } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronDown,
+  ExternalLink,
+  Image as ImageIcon,
+  Search,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
 import { formatBusinessDate, formatIstTimestamp, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, Spinner, StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PaymentReviewDialog, type PaymentAttemptView } from "@/components/admin/payment-review-dialog";
 import { ManualBookingDialog, type ManualBookingFacility } from "@/components/admin/manual-booking-dialog";
+import { BOOKING_TABS, type BookingTab } from "@/lib/types";
 
 interface AdminBooking {
   id: string;
@@ -51,6 +60,8 @@ interface ListResponse {
   page: number;
   totalPages: number;
   total: number;
+  /** How many sit behind each tab, for the counts on the pills. */
+  counts?: Record<BookingTab, number>;
 }
 
 type PendingAction =
@@ -78,14 +89,13 @@ export function BookingsManager({
   facilities: ManualBookingFacility[];
   /** Today in Asia/Kolkata, from the server — never the admin's device clock. */
   today: string;
-  initialFilters: { locationId?: string; date?: string; status?: string; payment?: string; search?: string };
+  initialFilters: { locationId?: string; date?: string; tab?: string; status?: string; payment?: string; search?: string };
   /** Page one for these filters, already queried on the server. */
   initialList: ListResponse;
 }) {
   const [locationId, setLocationId] = React.useState(initialFilters.locationId ?? "");
   const [date, setDate] = React.useState(initialFilters.date ?? "");
-  const [status, setStatus] = React.useState(initialFilters.status ?? "");
-  const [payment, setPayment] = React.useState(initialFilters.payment ?? "");
+  const [tab, setTab] = React.useState<BookingTab>((initialFilters.tab as BookingTab) ?? "all");
   const [search, setSearch] = React.useState(initialFilters.search ?? "");
   const [page, setPage] = React.useState(1);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
@@ -107,8 +117,7 @@ export function BookingsManager({
       const params = new URLSearchParams({ page: String(page) });
       if (locationId) params.set("locationId", locationId);
       if (date) params.set("date", date);
-      if (status) params.set("status", status);
-      if (payment) params.set("payment", payment);
+      if (tab !== "all") params.set("tab", tab);
       if (search.trim()) params.set("search", search.trim());
       setData(await api<ListResponse>(`/api/admin/bookings?${params.toString()}`));
     } catch (err) {
@@ -116,7 +125,7 @@ export function BookingsManager({
     } finally {
       setLoading(false);
     }
-  }, [locationId, date, status, payment, search, page]);
+  }, [locationId, date, tab, search, page]);
 
   /**
    * The list the server already rendered is the list for the filters the page
@@ -136,7 +145,7 @@ export function BookingsManager({
 
   React.useEffect(() => {
     setPage(1);
-  }, [locationId, date, status, payment, search]);
+  }, [locationId, date, tab, search]);
 
   async function runAction(action: PendingAction, reason: string) {
     setBusyId(action.booking.id);
@@ -251,7 +260,9 @@ export function BookingsManager({
   }
 
   const bookings = data?.bookings ?? [];
-  const activeFilters = [locationId, date, status, payment, search].filter(Boolean).length;
+  /** Only the ones hidden behind "More filters" — the tabs and search speak for themselves. */
+  const hiddenFilters = [locationId, date].filter(Boolean).length;
+  const counts = data?.counts;
 
   const addBooking =
     facilities.length > 0 ? (
@@ -280,38 +291,138 @@ export function BookingsManager({
         </div>
         {addBooking}
       </div>
-      {/* Filters */}
-      <section className="card" aria-label="Filters">
-        {/* Five stacked fields fill a phone screen, so the bookings only start below the fold. */}
-        <button
-          type="button"
-          className="flex h-11 w-full items-center justify-between gap-2 text-sm font-semibold text-ink-800 sm:hidden"
-          aria-expanded={filtersOpen}
-          aria-controls="booking-filters"
-          onClick={() => setFiltersOpen((open) => !open)}
-        >
-          <span className="flex items-center gap-2">
+      {/*
+        Search first, tabs second, everything else folded away.
+
+        The old bar put five equal dropdowns behind a "Filters" toggle, so on a
+        phone the screen opened with a collapsed grey box and no bookings above
+        the fold — and finding one by name meant expanding a panel first. The two
+        controls that are used constantly are now always on screen; location and
+        date, which are used occasionally, are the ones that fold.
+      */}
+      <section className="space-y-3" aria-label="Find bookings">
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400"
+            aria-hidden="true"
+          />
+          <input
+            id="filter-search"
+            className="field-input h-12 pl-10 pr-10 text-base"
+            placeholder="Search name, phone, reference or UTR"
+            aria-label="Search bookings"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setSearch("")}
+              className="absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-full text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+
+        {/* Scrolls sideways rather than wrapping: five wrapped pills push the first
+            booking off a phone screen, which is the problem this replaced. The
+            fade on the right edge is what says there is more to scroll to —
+            without it the strip just looks clipped. */}
+        <div className="relative -mx-4 sm:mx-0">
+          <div
+            role="tablist"
+            aria-label="Booking status"
+            className="flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:px-0 [&::-webkit-scrollbar]:hidden"
+          >
+            {BOOKING_TABS.map((t) => {
+              const on = tab === t.id;
+              const n = counts?.[t.id];
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    "flex h-10 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
+                    on
+                      ? "border-pitch-600 bg-pitch-600 text-white shadow-sm"
+                      : "border-ink-200 bg-white text-ink-600 hover:bg-ink-50",
+                  )}
+                >
+                  {t.label}
+                  {/* The count is the point of the tab: "To verify 4" is a to-do list. */}
+                  {typeof n === "number" ? (
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 py-0.5 text-xs font-semibold tabular-nums",
+                        on ? "bg-white/20 text-white" : "bg-ink-100 text-ink-600",
+                      )}
+                    >
+                      {n}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-ink-50 to-transparent sm:hidden"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="flex h-10 items-center gap-2 rounded-lg border border-ink-200 bg-white px-3 text-sm font-medium text-ink-700 hover:bg-ink-50"
+            aria-expanded={filtersOpen}
+            aria-controls="booking-filters"
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
             <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-            Filters
-            {activeFilters > 0 ? (
-              <span className="rounded-full bg-pitch-600 px-2 py-0.5 text-xs font-semibold text-white">
-                {activeFilters} active
+            Ground &amp; date
+            {hiddenFilters > 0 ? (
+              <span className="rounded-full bg-pitch-600 px-1.5 py-0.5 text-xs font-semibold text-white">
+                {hiddenFilters}
               </span>
             ) : null}
-          </span>
-          <ChevronDown className={cn("h-4 w-4 transition-transform", filtersOpen && "rotate-180")} aria-hidden="true" />
-        </button>
+            <ChevronDown className={cn("h-4 w-4 transition-transform", filtersOpen && "rotate-180")} aria-hidden="true" />
+          </button>
 
-        <div
-          id="booking-filters"
-          className={cn("mt-3 grid gap-3 sm:mt-0 sm:grid-cols-2 lg:grid-cols-5", !filtersOpen && "hidden sm:grid")}
-        >
+          {/* Outside the fold, so a filter left on last week can be cleared without
+              first remembering where it was set. */}
+          {hiddenFilters > 0 || search ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-10"
+              onClick={() => {
+                setLocationId("");
+                setDate("");
+                setSearch("");
+              }}
+            >
+              Clear
+            </Button>
+          ) : null}
+        </div>
+
+        <div id="booking-filters" className={cn("grid gap-3 sm:grid-cols-2", !filtersOpen && "hidden")}>
           <div>
             <label className="field-label" htmlFor="filter-location">
-              Location
+              Ground
             </label>
-            <select id="filter-location" className="field-input" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-              <option value="">All locations</option>
+            <select
+              id="filter-location"
+              className="field-input"
+              value={locationId}
+              onChange={(e) => setLocationId(e.target.value)}
+            >
+              <option value="">All grounds</option>
               {locations.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name}
@@ -323,65 +434,15 @@ export function BookingsManager({
             <label className="field-label" htmlFor="filter-date">
               Date
             </label>
-            <input id="filter-date" type="date" className="field-input" value={date} onChange={(e) => setDate(e.target.value)} />
-          </div>
-          <div>
-            <label className="field-label" htmlFor="filter-status">
-              Status
-            </label>
-            <select id="filter-status" className="field-input" value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="CONFIRMED">Confirmed</option>
-              <option value="REJECTED">Rejected</option>
-              <option value="CANCELLED">Cancelled</option>
-            </select>
-          </div>
-          <div>
-            <label className="field-label" htmlFor="filter-payment">
-              Payment
-            </label>
-            <select id="filter-payment" className="field-input" value={payment} onChange={(e) => setPayment(e.target.value)}>
-              <option value="">Any payment state</option>
-              <option value="PENDING">Not verified</option>
-              <option value="PARTIAL">Part paid</option>
-              <option value="VERIFIED">Verified</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
-          </div>
-          <div>
-            <label className="field-label" htmlFor="filter-search">
-              Search
-            </label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" aria-hidden="true" />
-              <input
-                id="filter-search"
-                className="field-input pl-9"
-                placeholder="Reference, name or phone"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
+            <input
+              id="filter-date"
+              type="date"
+              className="field-input"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </div>
         </div>
-        {/* Outside the collapsible block so a stale filter can be cleared without expanding it. */}
-        {(locationId || date || status || payment || search) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-3 h-11 w-full sm:h-9 sm:w-auto"
-            onClick={() => {
-              setLocationId("");
-              setDate("");
-              setStatus("");
-              setPayment("");
-              setSearch("");
-            }}
-          >
-            Clear filters
-          </Button>
-        )}
       </section>
 
       {notice ? (
@@ -544,6 +605,51 @@ const STATUS_ACCENT: Record<string, string> = {
   EXPIRED: "bg-ink-300",
 };
 
+/**
+ * Where a booking's money stands, in one sentence and one colour.
+ *
+ * The old card worked this out inline across four separate conditionals that had
+ * drifted apart — one of them called an agreed advance a shortfall. Deciding it
+ * once, here, is what stops the badge, the figure and the button disagreeing.
+ */
+function paymentSummary(b: AdminBooking): { tone: "paid" | "advance" | "short" | "waiting" | "dead"; line: string } {
+  const atGround = b.amountRemaining;
+  /** What had to arrive ONLINE. Below it is short; at it is the deal being kept. */
+  const metDue = b.amountPaid >= b.amountDueNow;
+  const onAdvance = b.amountDueNow < b.amount;
+  const dead = b.status === "REJECTED" || b.status === "CANCELLED" || b.status === "EXPIRED";
+
+  if (dead) {
+    return {
+      tone: "dead",
+      line: b.amountPaid > 0 ? `${formatCurrency(b.amountPaid)} received — may need refunding` : "Slots released",
+    };
+  }
+  if (atGround <= 0) return { tone: "paid", line: "Paid in full" };
+  if (b.payAtVenue || b.createdBy) {
+    return { tone: "advance", line: `${formatCurrency(atGround)} to collect at the ground` };
+  }
+  if (b.amountPaid > 0 && metDue && onAdvance) {
+    return { tone: "advance", line: `Advance paid · ${formatCurrency(atGround)} at the ground` };
+  }
+  if (b.amountPaid > 0) {
+    return {
+      tone: "short",
+      line: `${formatCurrency(b.amountPaid)} received · short by ${formatCurrency(b.amountDueNow - b.amountPaid)}`,
+    };
+  }
+  if (b.paymentMethod === "RAZORPAY") return { tone: "waiting", line: "Waiting for the online payment" };
+  return { tone: "waiting", line: onAdvance ? `Advance of ${formatCurrency(b.amountDueNow)} expected` : "Nothing received yet" };
+}
+
+const PAYMENT_TONE: Record<string, string> = {
+  paid: "border-green-200 bg-green-50 text-green-900",
+  advance: "border-green-200 bg-green-50 text-green-900",
+  short: "border-amber-200 bg-amber-50 text-amber-900",
+  waiting: "border-ink-200 bg-ink-50 text-ink-700",
+  dead: "border-ink-200 bg-ink-50 text-ink-600",
+};
+
 function BookingCard({
   booking,
   busy,
@@ -560,282 +666,195 @@ function BookingCard({
   const isPending = booking.status === "PENDING";
   /** The reference on the most recent payment that carries one. */
   const latestUtr = [...booking.payments].reverse().find((p) => p.utr)?.utr ?? null;
-  /**
-   * How this booking's money arrives, in one phrase.
-   *
-   * Worth its own line on the card: the owner's whole routine for a UPI booking is
-   * "open the screenshot and check it", and for a Razorpay one there is nothing to
-   * open and nothing to check. Without saying which is which, a gateway booking
-   * reads as a UPI booking whose customer forgot to attach anything.
-   */
-  const gateway = booking.paymentMethod === "RAZORPAY";
-  const methodLabel = booking.createdBy
-    ? "Phone booking"
-    : booking.payAtVenue
-      ? "Pay at ground"
-      : gateway
-        ? "Razorpay"
-        : "UPI screenshot";
-  // Confirming needs the money to actually add up, not just a verified flag.
   const paidInFull = booking.paymentVerificationStatus === "VERIFIED" && booking.amountRemaining <= 0;
   const owes = booking.amountRemaining > 0;
-  /*
-   * The customer chose to pay part now and the rest at the ground. Worth saying
-   * out loud: otherwise a ₹350 payment against a ₹700 pitch reads as someone who
-   * paid too little, and staff chase a balance that was always going to be
-   * collected at the gate.
-   */
   const onAdvance = booking.amountDueNow < booking.amount;
-  /**
-   * Whether the money that had to arrive online actually has. An advance
-   * customer who pays less than the advance is genuinely short — of the advance,
-   * not of the total — and the two numbers are different enough to matter.
-   */
   const metWhatWasDue = booking.amountPaid >= booking.amountDueNow;
-  const shortOfDue = Math.max(0, booking.amountDueNow - booking.amountPaid);
+  const gateway = booking.paymentMethod === "RAZORPAY";
 
   /**
    * Whether the server would accept a payment against this booking — the same
-   * three cases `recordManualPayment` allows, said in the same order.
-   *
-   * A booking taken over the phone is CONFIRMED from the moment it is made and
-   * still owes its money, so without this the owner who collects the balance at
-   * the gate has nowhere at all to record it, and the booking reads PARTIAL for
-   * ever.
+   * cases `recordManualPayment` allows, said in the same order.
    */
   const takesPayment =
     owes && (isPending || (booking.status === "CONFIRMED" && (booking.payAtVenue || Boolean(booking.createdBy))));
+
+  const money = paymentSummary(booking);
+  const methodLabel = booking.createdBy
+    ? "Phone"
+    : booking.payAtVenue
+      ? "At ground"
+      : gateway
+        ? "Razorpay"
+        : "UPI screenshot";
 
   /** What the customer actually turns up to use. */
   const service = [booking.facilityName, booking.resourceName !== booking.facilityName ? booking.resourceName : null]
     .filter(Boolean)
     .join(" · ");
 
+  /** The balance an advance customer hands over — one press, not a review dialog. */
+  const collectsBalance = booking.amountRemaining > 0 && onAdvance && metWhatWasDue;
+
   return (
-    <li className={cn("card relative overflow-hidden pl-5 sm:pl-6", busy && "opacity-70")}>
+    <li className={cn("card relative overflow-hidden p-4 pl-5", busy && "opacity-70")}>
       <span
         aria-hidden="true"
         className={cn("absolute inset-y-0 left-0 w-1.5", STATUS_ACCENT[booking.status] ?? "bg-ink-300")}
       />
 
-      {/* 1. Who, and where the booking stands. */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-x-4">
-        <p className="min-w-0 break-words text-lg font-semibold leading-tight text-ink-900 sm:flex-1">
-          {booking.customerName}
-        </p>
+      {/* 1. Who — name, how to reach them, and where the booking stands. */}
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden="true"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-pitch-50 text-sm font-bold uppercase text-pitch-700"
+        >
+          {booking.customerName.trim().charAt(0) || "?"}
+        </span>
 
-        {/* Two statuses that can both read "Pending" are meaningless side by side,
-            so each one says what it is about. */}
-        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs sm:shrink-0 sm:justify-end">
-          <div className="flex items-center gap-1.5">
-            <dt className="text-ink-500">Booking</dt>
-            <dd>
-              <StatusBadge status={booking.status} />
-            </dd>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <dt className="text-ink-500">Payment</dt>
-            <dd className="flex items-center gap-1.5">
-              <StatusBadge status={booking.paymentVerificationStatus} />
-              <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium text-ink-600">
-                {methodLabel}
-              </span>
-            </dd>
-          </div>
-        </dl>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[15px] font-semibold leading-tight text-ink-900">{booking.customerName}</p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink-500">
+            <a href={`tel:+91${booking.customerPhone}`} className="font-medium text-ink-600 hover:text-pitch-700">
+              +91 {booking.customerPhone}
+            </a>
+            <span aria-hidden="true">·</span>
+            <span className="whitespace-nowrap font-mono tracking-wide">{booking.reference}</span>
+          </p>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <StatusBadge status={booking.status} />
+          <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium text-ink-600">
+            {methodLabel}
+          </span>
+        </div>
       </div>
 
-      {/* 2. What they booked, at the size it is actually asked about on the phone.
-          It used to be the smallest text on the card, under the money. */}
-      <p className="mt-1.5 break-words text-[15px] font-semibold text-pitch-800">
+      {/* 2. What and when, on one line each. The two things asked about on the phone. */}
+      <p className="mt-3 truncate text-sm font-semibold text-pitch-800">
         {service || booking.locationName}
         {service ? <span className="font-normal text-ink-500"> · {booking.locationName}</span> : null}
       </p>
-
-      {/* 3. When, and how much — the two things a decision is made on. */}
-      <div className="mt-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 rounded-lg bg-ink-50 px-3 py-2.5">
-        <div className="min-w-0">
-          <p className="text-[15px] font-semibold leading-tight text-ink-900">
-            {formatBusinessDate(booking.date)}
-          </p>
-          <p className="mt-0.5 text-sm text-ink-700">
-            {formatRange(booking.startMin, booking.endMin)}
-            <span className="ml-1.5 text-xs text-ink-500">
-              ({booking.overs !== null
-                ? `${booking.overs} overs${booking.ballTypeName ? `, ${booking.ballTypeName}` : ""}`
-                : minutesToDuration(booking.endMin - booking.startMin)})
-            </span>
-          </p>
-        </div>
-        <div className="shrink-0 text-right">
-          <p className="text-lg font-bold leading-none text-ink-900">{formatCurrency(booking.amount)}</p>
-          <p className="mt-1 text-xs font-semibold">
-            {booking.amountPaid > 0 ? (
-              <span className={paidInFull ? "text-green-700" : "text-amber-700"}>
-                {formatCurrency(booking.amountPaid)} received
-                {owes ? (
-                  <span className="text-ink-500">
-                    {" · "}
-                    {onAdvance && metWhatWasDue
-                      ? `${formatCurrency(booking.amountRemaining)} at the ground`
-                      : `${formatCurrency(shortOfDue)} due`}
-                  </span>
-                ) : null}
-              </span>
-            ) : booking.payAtVenue || booking.createdBy ? (
-              // Not a payment to chase: this one was always going to be paid at the gate.
-              <span className="text-amber-700">collect at the ground</span>
-            ) : gateway && isPending ? (
-              // Not a payment to chase either: this one is mid-checkout, and its
-              // slots go back on sale by themselves if the money never lands.
-              // Only while it is still pending — a released booking is waiting
-              // for nothing, and saying otherwise sends staff looking for it.
-              <span className="text-amber-700">awaiting online payment</span>
-            ) : onAdvance ? (
-              <span className="text-amber-700">advance {formatCurrency(booking.amountDueNow)} expected</span>
-            ) : (
-              <span className="font-normal text-ink-500">nothing received</span>
-            )}
-          </p>
-        </div>
-      </div>
-
-      {/* 4. How to reach them, and what to search for. Quiet: needed when acting
-          on the booking, not when scanning the list. */}
-      <p className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-ink-500">
-        <a href={`tel:+91${booking.customerPhone}`} className="font-medium text-ink-700 hover:text-pitch-700">
-          +91 {booking.customerPhone}
-        </a>
-        <span aria-hidden="true">·</span>
-        {/* Short and meaningless if broken across lines, so it never wraps. */}
-        <span className="whitespace-nowrap font-mono text-xs tracking-wide">{booking.reference}</span>
-        {booking.createdBy ? (
-          <>
-            <span aria-hidden="true">·</span>
-            <span className="text-xs">
-              by phone, taken by <span className="font-medium text-ink-700">{booking.createdBy}</span>
-            </span>
-          </>
-        ) : null}
+      <p className="mt-1 flex items-center gap-1.5 text-sm text-ink-700">
+        <CalendarDays className="h-3.5 w-3.5 shrink-0 text-ink-400" aria-hidden="true" />
+        <span className="font-medium">{formatBusinessDate(booking.date)}</span>
+        <span className="text-ink-400">·</span>
+        {formatRange(booking.startMin, booking.endMin)}
+        <span className="text-xs text-ink-500">
+          (
+          {booking.overs !== null
+            ? `${booking.overs} overs${booking.ballTypeName ? `, ${booking.ballTypeName}` : ""}`
+            : minutesToDuration(booking.endMin - booking.startMin)}
+          )
+        </span>
       </p>
 
-      {/* The UTR, spelled out on the card: it is the first thing the owner looks
-          for when matching a booking to a line in the bank statement, and asking
-          them to open a dialog for it would mean opening one per booking. */}
+      {/* 3. The money, as one strip whose colour says whether anything is owed. */}
+      <div
+        className={cn(
+          "mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border px-3 py-2",
+          PAYMENT_TONE[money.tone],
+        )}
+      >
+        <span className="min-w-0 text-sm font-medium">{money.line}</span>
+        <span className="shrink-0 text-base font-bold tabular-nums">{formatCurrency(booking.amount)}</span>
+      </div>
+
+      {/* The UTR, spelled out: it is the first thing the owner looks for when
+          matching a booking to a line in the bank statement. */}
       {latestUtr ? (
-        <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-sm">
+        <p className="mt-2 flex flex-wrap items-baseline gap-x-2 text-xs">
           <span className="text-ink-500">UTR</span>
           <span className="select-all font-mono font-semibold tracking-wide text-ink-800">{latestUtr}</span>
           {!booking.hasScreenshot && !gateway ? (
-            <span className="text-xs text-ink-500">(no screenshot — check the statement)</span>
+            <span className="text-ink-500">(no screenshot — check the statement)</span>
           ) : null}
-        </p>
-      ) : null}
-
-      {/* "Short by" is for money that was expected and did not arrive. An advance
-          balance was never expected online, so calling it short reads as a problem
-          when it is the arrangement working as intended. */}
-      {booking.amountRemaining > 0 && onAdvance && metWhatWasDue ? (
-        <p className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-900">
-          Advance paid. {formatCurrency(booking.amountRemaining)} to collect at the ground.
-        </p>
-      ) : takesPayment && booking.amountPaid > 0 ? (
-        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
-          {/* Short of what was actually asked for. On an advance booking that is
-              the advance — saying they are ₹400 short when ₹100 would settle it
-              sends staff chasing money nobody agreed to pay yet. */}
-          Short by {formatCurrency(shortOfDue)}
-          {onAdvance ? ` of the ${formatCurrency(booking.amountDueNow)} due now` : ""}
-          {isPending ? " — the slots are still reserved for this customer." : "."}
         </p>
       ) : null}
 
       {/*
         The customer paid and sent an image; our storage would not take it. Said
-        loudly, because the usual "no screenshot" signal here means the customer
-        did not send one, and this is the opposite situation.
+        loudly, because the usual "no screenshot" signal means the customer did
+        not send one, and this is the opposite situation.
       */}
       {booking.screenshotUploadStatus === "FAILED" ? (
-        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
-          <p className="font-semibold">⚠️ Payment screenshot unavailable — verify using the UTR or bank statement.</p>
-          <p className="mt-1">
-            The customer sent a valid screenshot and our storage could not accept it. Nothing here has been
-            verified automatically.
-          </p>
-          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
-            <div>
-              <dt className="text-amber-800">Expected</dt>
-              <dd className="font-semibold">{formatCurrency(booking.amount)}</dd>
-            </div>
-            <div>
-              <dt className="text-amber-800">Received</dt>
-              <dd className="font-semibold">
-                {booking.amountPaid > 0 ? formatCurrency(booking.amountPaid) : "not yet"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-amber-800">UTR</dt>
-              <dd className="select-all font-mono font-semibold">{latestUtr ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-amber-800">Payment</dt>
-              <dd className="font-semibold">{booking.paymentVerificationStatus.toLowerCase()}</dd>
-            </div>
-          </dl>
-        </div>
+        <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span className="font-semibold">⚠️ Screenshot unavailable</span> — the customer sent a valid one and our
+          storage refused it. Verify against the UTR or the bank statement.
+        </p>
       ) : null}
 
       {booking.rejectionReason ? (
-        <p className="mt-3 text-sm text-ink-600">
+        <p className="mt-2 text-xs text-ink-600">
           <span className="text-ink-500">Reason:</span> {booking.rejectionReason}
         </p>
       ) : null}
 
-      {/* Stacked below sm: six short buttons wrapping on a phone read as a jumble, and
-          36px-tall pills are hard to hit for an owner working one-handed. */}
-      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        {takesPayment ? (
-          <Button size="sm" className="h-11 sm:h-9" onClick={onReview} disabled={busy}>
+      {/* 4. What to do about it. Two per row on a phone rather than a stack of
+             full-width bars, which pushed the next booking off the screen. */}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {takesPayment && !collectsBalance ? (
+          <Button size="sm" className="h-10 flex-1 sm:h-9 sm:flex-none" onClick={onReview} disabled={busy}>
             {/* A confirmed phone booking is not "under review" — the owner is
                 writing down cash they have already taken. */}
-            {isPending ? "Review payment" : `Record ${formatCurrency(booking.amountRemaining)} received`}
+            {isPending ? "Review payment" : `Record ${formatCurrency(booking.amountRemaining)}`}
+          </Button>
+        ) : null}
+
+        {collectsBalance ? (
+          <Button size="sm" className="h-10 flex-1 sm:h-9 sm:flex-none" onClick={() => onAction("SETTLE_BALANCE")} disabled={busy}>
+            Record {formatCurrency(booking.amountRemaining)}
           </Button>
         ) : null}
 
         {isPending && paidInFull ? (
-          <Button size="sm" className="h-11 sm:h-9" onClick={() => onAction("CONFIRM")} disabled={busy}>
+          <Button size="sm" className="h-10 flex-1 sm:h-9 sm:flex-none" onClick={() => onAction("CONFIRM")} disabled={busy}>
             Accept booking
           </Button>
         ) : null}
 
-        {/* An advance balance is collected at the gate, so the useful button records
-            it. A genuine shortfall is chased on WhatsApp instead — different money,
-            different action. */}
-        {booking.amountRemaining > 0 && onAdvance && metWhatWasDue ? (
-          <Button size="sm" className="h-11 sm:h-9" onClick={() => onAction("SETTLE_BALANCE")} disabled={busy}>
-            Record {formatCurrency(booking.amountRemaining)}
-          </Button>
-        ) : takesPayment && booking.amountPaid > 0 ? (
-          <Button size="sm" variant="whatsapp" className="h-11 sm:h-9" onClick={() => onWhatsapp("BALANCE")} disabled={busy}>
+        {/* A genuine shortfall is chased on WhatsApp; an advance balance is not a
+            shortfall, so it gets the Record button above instead. */}
+        {takesPayment && booking.amountPaid > 0 && !collectsBalance ? (
+          <Button
+            size="sm"
+            variant="whatsapp"
+            className="h-10 flex-1 sm:h-9 sm:flex-none"
+            onClick={() => onWhatsapp("BALANCE")}
+            disabled={busy}
+          >
             Ask for {formatCurrency(booking.amountRemaining)}
           </Button>
         ) : null}
 
         {booking.status === "CONFIRMED" ? (
-          <Button size="sm" variant="whatsapp" className="h-11 sm:h-9" onClick={() => onWhatsapp("CONFIRM")} disabled={busy}>
+          <Button
+            size="sm"
+            variant="whatsapp"
+            className="h-10 flex-1 sm:h-9 sm:flex-none"
+            onClick={() => onWhatsapp("CONFIRM")}
+            disabled={busy}
+          >
             Confirm via WhatsApp
           </Button>
         ) : null}
 
         {booking.status === "REJECTED" ? (
-          <Button size="sm" variant="whatsapp" className="h-11 sm:h-9" onClick={() => onWhatsapp("REJECT")} disabled={busy}>
+          <Button
+            size="sm"
+            variant="whatsapp"
+            className="h-10 flex-1 sm:h-9 sm:flex-none"
+            onClick={() => onWhatsapp("REJECT")}
+            disabled={busy}
+          >
             Reject via WhatsApp
           </Button>
         ) : null}
 
         {booking.hasScreenshot ? (
           <a href={`/api/admin/bookings/${booking.id}/screenshot`} target="_blank" rel="noopener noreferrer">
-            <Button variant="secondary" size="sm" className="h-11 w-full sm:h-9 sm:w-auto">
+            <Button variant="secondary" size="sm" className="h-10 w-full sm:h-9 sm:w-auto">
               <ImageIcon className="h-4 w-4" aria-hidden="true" />
               Screenshot
               <ExternalLink className="h-3 w-3" aria-hidden="true" />
@@ -843,14 +862,13 @@ function BookingCard({
           </a>
         ) : null}
 
-        {/* Releasing someone's slots is irreversible, so it is pushed to the end and
-            styled quietly. A solid red button was the loudest thing on the card and
-            sat right beside the one the owner actually presses all day. */}
+        {/* Releasing someone's slots is irreversible, so it is pushed to the end
+            and styled quietly. */}
         {isPending ? (
           <Button
             size="sm"
             variant="secondary"
-            className="h-11 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 sm:ml-auto sm:h-9"
+            className="h-10 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 sm:ml-auto sm:h-9"
             onClick={() => onAction("REJECT")}
             disabled={busy}
           >
@@ -861,9 +879,7 @@ function BookingCard({
         {busy ? <Spinner className="self-center text-ink-500" /> : null}
       </div>
 
-      <p className="mt-3 border-t border-ink-100 pt-2 text-xs text-ink-400">
-        Requested {formatIstTimestamp(booking.createdAt)}
-      </p>
+      <p className="mt-2.5 text-[11px] text-ink-400">Requested {formatIstTimestamp(booking.createdAt)}</p>
     </li>
   );
 }

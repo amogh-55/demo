@@ -12,7 +12,14 @@ export const metadata: Metadata = { title: "Bookings", robots: { index: false } 
 export default async function AdminBookingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ locationId?: string; date?: string; status?: string; payment?: string; search?: string }>;
+  searchParams: Promise<{
+    locationId?: string;
+    date?: string;
+    tab?: string;
+    status?: string;
+    payment?: string;
+    search?: string;
+  }>;
 }) {
   const filters = await searchParams;
   const db = await getDb();

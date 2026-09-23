@@ -58,6 +58,11 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
                switched it on. Every request checks the same pair again, so a page
                left open across a settings change cannot open a dead checkout. */
             onlinePaymentReady={razorpayConfigured() && settings.razorpayEnabled}
+            /* Withdrawn only when the gateway can genuinely take the payment
+               instead — the server applies the same rule on submission. */
+            manualPaymentAllowed={
+              !(razorpayConfigured() && settings.razorpayEnabled) || settings.upiScreenshotEnabled
+            }
             payment={{
               businessName: settings.businessName,
               upiId: settings.upiId,

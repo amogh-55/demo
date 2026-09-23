@@ -22,6 +22,8 @@ export const defaultSettings = (): Omit<SettingsDoc, "_id"> => ({
   // Off until the owner has a Razorpay account they have actually tested. The
   // manual UPI flow is what runs meanwhile, exactly as it always has.
   razorpayEnabled: false,
+  // On, because until the gateway is live it is the only way to pay.
+  upiScreenshotEnabled: true,
   notifyPhone: "",
   notifyOnNewBooking: false,
   updatedAt: new Date(),

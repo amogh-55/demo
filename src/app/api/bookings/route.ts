@@ -51,6 +51,13 @@ export async function POST(request: Request) {
      * looking at a demand for a payment reference nobody asked them to produce.
      */
     const gatewayReady = razorpayConfigured() && settings.razorpayEnabled;
+    /*
+     * The screenshot route is only ever withdrawn while there is a working
+     * alternative. With the gateway off or unconfigured the owner's switch is
+     * ignored outright, because a site offering no way at all to pay is a worse
+     * outcome than one still showing an option they would rather retire.
+     */
+    const manualAllowed = !gatewayReady || settings.upiScreenshotEnabled;
     if (input.paymentMethod === "RAZORPAY" && !gatewayReady) {
       throw appError(
         "CONFLICT",
@@ -67,6 +74,7 @@ export async function POST(request: Request) {
       payAdvance: input.payAdvance,
       paymentMethod: input.paymentMethod === "RAZORPAY" ? "RAZORPAY" : "UPI_MANUAL",
       customerEmail: input.customerEmail,
+      allowManualPayment: manualAllowed,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,
       /*

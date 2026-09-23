@@ -13,6 +13,7 @@ interface Settings {
   upiQrImageUrl: string;
   otpEnabled: boolean;
   razorpayEnabled: boolean;
+  upiScreenshotEnabled: boolean;
   notifyPhone: string;
   notifyOnNewBooking: boolean;
 }
@@ -94,7 +95,7 @@ export function SettingsForm({
         <h2 className="font-semibold text-ink-900">Online payment (Razorpay)</h2>
         <p className="mt-1 text-sm text-ink-600">
           Lets customers pay by card, UPI or netbanking while they book. Those bookings confirm themselves — there is no
-          screenshot for you to check. The UPI screenshot option stays available either way.
+          screenshot for you to check.
         </p>
 
         {!razorpay.ready ? (
@@ -115,14 +116,52 @@ export function SettingsForm({
           </Alert>
         )}
 
-        <div className="mt-4">
+        <div className="mt-4 space-y-3">
           <Toggle
             label="Take payments online with Razorpay"
-            hint="Customers choose card/UPI/netbanking or the usual UPI screenshot. Turn it off to go back to screenshots only."
+            hint="Customers pay by card, UPI or netbanking and the booking confirms itself."
             checked={form.razorpayEnabled}
             onChange={(razorpayEnabled) => set({ razorpayEnabled })}
           />
+
+          {/*
+            Nested, because it only means anything while the gateway is on, and
+            phrased as the thing being switched ON rather than the thing being
+            kept: "accept online only" is the decision the owner is making, and an
+            unticked box is the safe state to land on.
+
+            The stored field is the opposite — upiScreenshotEnabled, defaulting to
+            true — so that a settings document written before this existed, or one
+            missing the field for any reason, reads as "screenshots still work"
+            rather than as a site that has quietly stopped taking them.
+          */}
+          <div className="sm:pl-6">
+            <Toggle
+              label="Accept online payments only"
+              hint="Hides the UPI + screenshot option, so customers can only pay by card, UPI or netbanking. Untick it if Razorpay starts giving customers trouble."
+              checked={!form.upiScreenshotEnabled}
+              onChange={(onlineOnly) => set({ upiScreenshotEnabled: !onlineOnly })}
+            />
+          </div>
         </div>
+
+        {/*
+          The one combination that would take the site off sale. Said as a fact
+          rather than prevented, because the server already ignores the switch in
+          exactly this case — but the owner should know why their change appears
+          to have done nothing.
+        */}
+        {!form.upiScreenshotEnabled && (!form.razorpayEnabled || !razorpay.ready) ? (
+          <Alert tone="warning" className="mt-3">
+            Online payment is not running, so customers are still being offered the UPI screenshot option — otherwise
+            they would have no way to pay at all. This takes effect once Razorpay is switched on above.
+          </Alert>
+        ) : !form.upiScreenshotEnabled ? (
+          <Alert tone="info" className="mt-3">
+            Customers will only be offered card, UPI and netbanking through Razorpay. Nobody can book by sending a
+            screenshot.
+          </Alert>
+        ) : null}
       </section>
 
       <section className="card">

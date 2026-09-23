@@ -161,6 +161,7 @@ export function BookingFlow({
   otpEnabled,
   otpWidget,
   onlinePaymentReady,
+  manualPaymentAllowed,
 }: {
   locations: PublicLocation[];
   payment: PaymentSettings;
@@ -191,6 +192,13 @@ export function BookingFlow({
    * gets a clear refusal and the UPI flow.
    */
   onlinePaymentReady: boolean;
+  /**
+   * Whether paying by UPI and sending a screenshot is still on offer.
+   *
+   * False only when the gateway can take the payment instead, so this never
+   * leaves the page with nothing to offer. Checked again on submission.
+   */
+  manualPaymentAllowed: boolean;
 }) {
   const router = useRouter();
 
@@ -267,6 +275,14 @@ export function BookingFlow({
   const [method, setMethod] = React.useState<"RAZORPAY" | "UPI_MANUAL">(
     onlinePaymentReady ? "RAZORPAY" : "UPI_MANUAL",
   );
+  /**
+   * What is actually being used, as opposed to what was last picked.
+   *
+   * Derived rather than corrected in an effect: with the screenshot route
+   * withdrawn there is exactly one way to pay, and a stale `method` in state
+   * would otherwise render a UPI form the server is about to refuse.
+   */
+  const method_ = !manualPaymentAllowed ? "RAZORPAY" : onlinePaymentReady ? method : "UPI_MANUAL";
   /**
    * The booking created for an online payment, kept so a retry pays for THAT
    * booking rather than making a second one. This is what makes "pay again" after
@@ -861,7 +877,7 @@ export function BookingFlow({
   const storageIsDown = uploadProblem?.kind === "STORAGE";
   // The gateway asks for none of this: there is no reference to type and no image
   // to send, because the booking is settled from Razorpay's own record of it.
-  const paymentProblem = hold?.payAtVenue || method === "RAZORPAY"
+  const paymentProblem = hold?.payAtVenue || method_ === "RAZORPAY"
     ? null
     : !utrValid
       ? utrDigits.length === 0
@@ -1678,14 +1694,14 @@ export function BookingFlow({
                 </section>
               ) : null}
 
-              {onlinePaymentReady ? (
+              {onlinePaymentReady && manualPaymentAllowed ? (
                 <section className="card" aria-labelledby="method-heading">
                   <h2 id="method-heading" className="text-lg font-semibold text-white">
                     How would you like to pay?
                   </h2>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <PayChoice
-                      selected={method === "RAZORPAY"}
+                      selected={method_ === "RAZORPAY"}
                       onSelect={() => {
                         setMethod("RAZORPAY");
                         setError(null);
@@ -1694,7 +1710,7 @@ export function BookingFlow({
                       detail="Confirmed straight away"
                     />
                     <PayChoice
-                      selected={method === "UPI_MANUAL"}
+                      selected={method_ === "UPI_MANUAL"}
                       onSelect={() => {
                         setMethod("UPI_MANUAL");
                         setError(null);
@@ -1706,7 +1722,7 @@ export function BookingFlow({
                   {/* Said here rather than discovered later: a booking made this
                       way sits waiting for a person, and that is a different
                       promise from the one above it. */}
-                  {method === "UPI_MANUAL" ? (
+                  {method_ === "UPI_MANUAL" ? (
                     <p className="mt-3 text-xs text-ink-400">
                       Your slot stays reserved while the turf team checks your payment, usually within a few minutes.
                     </p>
@@ -1714,7 +1730,7 @@ export function BookingFlow({
                 </section>
               ) : null}
 
-              {method === "RAZORPAY" ? (
+              {method_ === "RAZORPAY" ? (
                 <section className="card" aria-labelledby="online-heading">
                   <h2 id="online-heading" className="text-lg font-semibold text-white">
                     Pay {formatCurrency(dueNow)} now
@@ -1786,7 +1802,7 @@ export function BookingFlow({
                 </section>
               ) : null}
 
-              {method === "UPI_MANUAL" ? (
+              {method_ === "UPI_MANUAL" ? (
               <>
               <section className="card" aria-labelledby="payment-heading">
                 <h2 id="payment-heading" className="text-lg font-semibold text-white">
