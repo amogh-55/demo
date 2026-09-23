@@ -8,7 +8,10 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-full text-sm font-semibold transition-colors " +
+  // `whitespace-nowrap`: these are fixed-height pills, so a label that wrapped to
+  // two lines spilled out of its own button. In a wrapping row the label now
+  // pushes the button onto the next line instead of overflowing it.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-semibold transition-colors " +
     "disabled:pointer-events-none disabled:opacity-60",
   {
     variants: {
