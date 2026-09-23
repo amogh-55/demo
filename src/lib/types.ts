@@ -487,10 +487,14 @@ export interface SettingsDoc {
    * than one showing an option the owner would rather retire, so this yields.
    */
   upiScreenshotEnabled: boolean;
-  /** Where "new booking" alerts go. Falls back to supportPhone when blank. */
-  notifyPhone: string;
-  /** Send an SMS to notifyPhone whenever a booking comes in. */
-  notifyOnNewBooking: boolean;
+  /**
+   * Email the owner a copy of every booking that confirms.
+   *
+   * On by default and free to run, unlike the SMS switches below — but it is the
+   * owner's own inbox, and a busy ground can confirm a lot of bookings a day.
+   * Has no effect unless Resend and OWNER_EMAIL are configured.
+   */
+  emailOnBooking: boolean;
   updatedAt: Date;
 }
 

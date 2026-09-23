@@ -932,7 +932,7 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   if (!bookedBy && !payAtVenue && !byGateway && input.allowManualPayment === false) {
     throw appError(
       "CONFLICT",
-      "Payment screenshots are not being accepted at the moment. Please pay online to finish your booking.",
+      "We are not accepting payment screenshots at the moment — please pay online to finish your booking. If you have already sent the money by UPI, do NOT pay again: call the ground and they will confirm this booking for you.",
     );
   }
   const utr = bookedBy || byGateway ? null : (input.utr ?? null);

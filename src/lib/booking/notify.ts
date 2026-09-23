@@ -27,10 +27,16 @@ import type { BookingDoc } from "@/lib/types";
  */
 export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void> {
   if (!resendConfigured()) return;
-  // Nothing to say to anyone: no owner address configured and no customer address
-  // given. Checked before the flag is claimed so a later configuration fix still
-  // has a booking to email about.
-  if (!ownerEmail() && !booking.customerEmail) return;
+
+  // The owner's copy is a switch in Admin -> Settings, because it is their own
+  // inbox and a busy ground confirms a lot of bookings. The customer's copy is
+  // not: they asked for it by typing their address into the booking form.
+  const settings = await getSettings();
+  const toOwner = settings.emailOnBooking ? ownerEmail() : "";
+  // Nothing to say to anyone: owner copy off or unconfigured, and no customer
+  // address given. Checked before the flag is claimed so a later configuration
+  // fix still has a booking to email about.
+  if (!toOwner && !booking.customerEmail) return;
 
   const db = await getDb();
   // `: null` matches a missing field as well as a null one, which is what every
@@ -40,10 +46,7 @@ export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void>
     .updateOne({ _id: booking._id, confirmationEmailAt: null }, { $set: { confirmationEmailAt: new Date() } });
   if (claimed.modifiedCount !== 1) return; // somebody else already sent it
 
-  const [settings, location] = await Promise.all([
-    getSettings(),
-    collections.locations(db).findOne({ _id: booking.locationId }),
-  ]);
+  const location = await collections.locations(db).findOne({ _id: booking.locationId });
 
   const paid = booking.amountPaid ?? 0;
   const remaining = Math.max(0, booking.amount - paid);
@@ -76,7 +79,7 @@ export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void>
   // Sent in parallel and never awaited by the payment path that called this: an
   // email is a courtesy on top of money that has already arrived.
   const results = await Promise.all([
-    ownerEmail() ? sendEmail({ to: ownerEmail(), ...ownerBookingEmail(facts) }) : Promise.resolve(false),
+    toOwner ? sendEmail({ to: toOwner, ...ownerBookingEmail(facts) }) : Promise.resolve(false),
     booking.customerEmail
       ? sendEmail({ to: booking.customerEmail, ...customerBookingEmail(facts) })
       : Promise.resolve(false),

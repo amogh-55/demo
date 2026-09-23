@@ -24,8 +24,9 @@ export const defaultSettings = (): Omit<SettingsDoc, "_id"> => ({
   razorpayEnabled: false,
   // On, because until the gateway is live it is the only way to pay.
   upiScreenshotEnabled: true,
-  notifyPhone: "",
-  notifyOnNewBooking: false,
+  // On, unlike the SMS switches: email costs nothing to send, and an owner who
+  // has gone to the trouble of configuring OWNER_EMAIL wants the bookings.
+  emailOnBooking: true,
   updatedAt: new Date(),
 });
 

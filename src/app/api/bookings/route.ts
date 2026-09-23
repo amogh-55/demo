@@ -8,8 +8,6 @@ import { OTP_COOKIE, readVerifiedPhone } from "@/lib/otp";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { razorpayConfigured } from "@/lib/razorpay";
 import { getSettings } from "@/lib/settings";
-import { notifyNewBooking } from "@/lib/sms";
-import { formatBusinessDate, formatCompactRange } from "@/lib/time";
 import { bookingSubmitSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
@@ -84,24 +82,6 @@ export async function POST(request: Request) {
        */
       storageFailed: uploadFailureProven(jar.get(UPLOAD_FAILED_COOKIE)?.value, input.holdToken),
     });
-
-    /*
-     * A gateway booking has not been paid for yet and may never be, so the owner
-     * is told about it when the money lands rather than when the form was
-     * submitted — the settle path sends this same alert. Texting them about a
-     * booking that evaporates in fifteen minutes costs them money and trust in
-     * the alert.
-     */
-    if (settings.notifyOnNewBooking && booking.paymentMethod !== "RAZORPAY") {
-      notifyNewBooking(settings.notifyPhone || settings.supportPhone, {
-        reference: booking.reference,
-        customerName: booking.customerName,
-        locationName: booking.locationName,
-        facilityName: booking.facilityName,
-        when: `${formatBusinessDate(booking.date)} ${formatCompactRange(booking.startMin, booking.endMin)}`,
-        amount: booking.amount,
-      });
-    }
 
     // Remember the finished booking for the success page and any balance payment...
     jar.set(LAST_BOOKING_COOKIE, signCookieValue(booking.reference), {

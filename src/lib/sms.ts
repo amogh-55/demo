@@ -118,19 +118,3 @@ export async function sendSms(phone: string, message: string): Promise<boolean> 
     return false;
   }
 }
-
-/**
- * Tell the owner a booking arrived. Fire-and-forget on purpose: the customer's
- * request is already safely in the database and must not fail because an SMS did.
- */
-export function notifyNewBooking(
-  phone: string,
-  booking: { reference: string; customerName: string; locationName: string; facilityName: string; when: string; amount: number },
-): void {
-  if (!phone) return;
-  const message =
-    `New booking ${booking.reference}: ${booking.customerName} — ` +
-    `${booking.facilityName}, ${booking.locationName}, ${booking.when}. ` +
-    `₹${booking.amount}. Verify the payment in the admin panel.`;
-  void sendSms(phone, message).catch(() => {});
-}

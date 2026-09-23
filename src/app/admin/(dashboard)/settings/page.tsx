@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { getSettings } from "@/lib/settings";
 import { razorpayConfigured, razorpayLiveMode, razorpayWebhookConfigured } from "@/lib/razorpay";
+import { ownerEmail, resendConfigured } from "@/lib/email";
 import { smsConfigured } from "@/lib/sms";
 import { SettingsForm } from "@/components/admin/settings-form";
 
@@ -15,11 +16,12 @@ export default async function AdminSettingsPage() {
     <div className="mx-auto max-w-3xl space-y-4">
       <div>
         <h1 className="text-xl font-bold text-ink-900">Settings</h1>
-        <p className="text-sm text-ink-600">Business details, payment information and SMS.</p>
+        <p className="text-sm text-ink-600">Business details, how customers pay, and what gets sent to you.</p>
       </div>
 
       <SettingsForm
         smsReady={smsConfigured()}
+        email={{ ready: resendConfigured() && Boolean(ownerEmail()), address: ownerEmail() }}
         razorpay={{
           ready: razorpayConfigured(),
           webhookReady: razorpayWebhookConfigured(),
@@ -35,8 +37,7 @@ export default async function AdminSettingsPage() {
           otpEnabled: settings.otpEnabled,
           razorpayEnabled: settings.razorpayEnabled,
           upiScreenshotEnabled: settings.upiScreenshotEnabled,
-          notifyPhone: settings.notifyPhone,
-          notifyOnNewBooking: settings.notifyOnNewBooking,
+          emailOnBooking: settings.emailOnBooking,
         }}
       />
     </div>

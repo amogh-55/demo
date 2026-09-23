@@ -20,8 +20,7 @@ export async function GET() {
         otpEnabled: settings.otpEnabled,
         razorpayEnabled: settings.razorpayEnabled,
         upiScreenshotEnabled: settings.upiScreenshotEnabled,
-        notifyPhone: settings.notifyPhone,
-        notifyOnNewBooking: settings.notifyOnNewBooking,
+        emailOnBooking: settings.emailOnBooking,
       },
     });
   } catch (err) {
@@ -43,7 +42,7 @@ export async function PUT(request: Request) {
         otpEnabled: saved.otpEnabled,
         razorpayEnabled: saved.razorpayEnabled,
         upiScreenshotEnabled: saved.upiScreenshotEnabled,
-        notifyOnNewBooking: saved.notifyOnNewBooking,
+        emailOnBooking: saved.emailOnBooking,
       },
     });
   } catch (err) {

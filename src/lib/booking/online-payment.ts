@@ -15,8 +15,6 @@ import {
   type RazorpayPayment,
 } from "@/lib/razorpay";
 import { getSettings } from "@/lib/settings";
-import { notifyNewBooking } from "@/lib/sms";
-import { formatBusinessDate, formatCompactRange } from "@/lib/time";
 import type { BookingDoc, PaymentAttempt } from "@/lib/types";
 import { notifyPaymentNeedsAttention } from "./notify";
 import { confirmBooking, paymentRollupStages, rejectBooking } from "./service";
@@ -278,12 +276,9 @@ export async function settleRazorpayPayment(
   if (current.status === "PENDING" && (current.amountPaid ?? 0) >= dueNow) {
     // Idempotent: a booking already confirmed by the other caller comes straight
     // back out, and the slots move PENDING -> BOOKED exactly once.
-    const confirmed = await confirmBooking(current._id, { username: "razorpay" });
-    // The owner's "new booking" text, held back at submission time because
-    // nothing had been paid then. Only the caller that actually recorded the
-    // payment sends it, so a retried webhook does not text them twice.
-    if (updated) void alertOwner(confirmed).catch(() => {});
-    return confirmed;
+    // The owner hears about it by email, from confirmBooking itself, and only
+    // once however many times this runs.
+    return await confirmBooking(current._id, { username: "razorpay" });
   }
 
   /*
@@ -303,20 +298,6 @@ export async function settleRazorpayPayment(
   }
 
   return current;
-}
-
-/** The owner's SMS alert, sent once the gateway money is actually in. */
-async function alertOwner(booking: BookingDoc): Promise<void> {
-  const settings = await getSettings();
-  if (!settings.notifyOnNewBooking) return;
-  notifyNewBooking(settings.notifyPhone || settings.supportPhone, {
-    reference: booking.reference,
-    customerName: booking.customerName,
-    locationName: booking.locationName,
-    facilityName: booking.facilityName,
-    when: `${formatBusinessDate(booking.date)} ${formatCompactRange(booking.startMin, booking.endMin)}`,
-    amount: booking.amount,
-  });
 }
 
 /**

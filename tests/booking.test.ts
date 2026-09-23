@@ -12,6 +12,14 @@ import { config as loadEnv } from "../scripts/env";
 
 loadEnv();
 
+/*
+ * The suite confirms dozens of bookings, and a confirmation sends real email.
+ * With a working RESEND_API_KEY in .env.local that means a run spamming the
+ * owner's inbox, so the key is taken away here and put back only by the one
+ * describe block that tests the sending decision — against a stubbed fetch.
+ */
+delete process.env.RESEND_API_KEY;
+
 const HAS_DB = Boolean(process.env.MONGODB_URI);
 if (!HAS_DB) {
   console.warn(
@@ -2914,6 +2922,77 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
       assert.equal(await online.reclaimAbandonedOnlinePayments({ resourceId: RESOURCE_ID, date: on }), 0);
       assert.equal((await collections.bookings(db).findOne({ _id: booking._id }))!.status, "PENDING");
+    });
+  });
+
+  /* ── The owner's copy ──────────────────────────────────────────────── */
+
+  describe("emailing the owner about a confirmed booking", () => {
+    let notify: typeof import("../src/lib/booking/notify");
+    const realFetch = globalThis.fetch;
+    let sentTo: string[] = [];
+
+    before(async () => {
+      notify = await import("../src/lib/booking/notify");
+    });
+
+    beforeEach(() => {
+      sentTo = [];
+      process.env.RESEND_API_KEY = "re_test_key_not_real";
+      process.env.RESEND_FROM_EMAIL = "Turf <onboarding@resend.dev>";
+      process.env.OWNER_EMAIL = "owner@example.com";
+      // Nothing leaves the machine. What is under test is which addresses the
+      // code decides to send to, not whether Resend would accept them.
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.includes("api.resend.com")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { to?: string[] };
+          sentTo.push(...(body.to ?? []));
+          return new Response(JSON.stringify({ id: "email_test" }), { status: 200 });
+        }
+        return realFetch(input, init);
+      }) as typeof fetch;
+    });
+
+    after(() => {
+      globalThis.fetch = realFetch;
+      delete process.env.RESEND_API_KEY;
+    });
+
+    /** Confirms one booking with the owner's switch in the given position. */
+    async function addressesEmailed(emailOnBooking: boolean, customerEmail?: string) {
+      await collections.settings(db).updateOne({ _id: "business" }, { $set: { emailOnBooking } }, { upsert: true });
+      const hold = await service.createHold({
+        resourceId: RESOURCE_ID,
+        date: futureDate(7),
+        startMin: 1020,
+        endMin: 1080,
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        customerEmail,
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      await acceptPayment(booking);
+      // Called directly: confirmBooking deliberately does not await the send, so
+      // going through it would be a race rather than a test.
+      await notify.notifyBookingConfirmed((await collections.bookings(db).findOne({ _id: booking._id }))!);
+      return sentTo;
+    }
+
+    it("emails the owner while the box is ticked", async () => {
+      assert.deepEqual(await addressesEmailed(true), ["owner@example.com"]);
+    });
+
+    it("emails the owner nothing once they untick it", async () => {
+      assert.deepEqual(await addressesEmailed(false), []);
+    });
+
+    it("still sends the customer their own copy with the owner's switched off", async () => {
+      assert.deepEqual(await addressesEmailed(false, "player@example.com"), ["player@example.com"]);
     });
   });
 });

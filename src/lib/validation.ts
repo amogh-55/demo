@@ -491,9 +491,8 @@ export const settingsSchema = z.object({
   razorpayEnabled: z.boolean().default(false),
   /** Ignored while the gateway is unavailable — see SettingsDoc. */
   upiScreenshotEnabled: z.boolean().default(true),
-  /** Blank is allowed and means "use the support number". */
-  notifyPhone: z.union([z.literal(""), phoneSchema]).default(""),
-  notifyOnNewBooking: z.boolean().default(false),
+  /** Has no effect without Resend keys and OWNER_EMAIL; the form says so. */
+  emailOnBooking: z.boolean().default(true),
 });
 
 export const adminBookingsQuerySchema = z.object({

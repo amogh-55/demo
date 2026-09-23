@@ -14,19 +14,21 @@ interface Settings {
   otpEnabled: boolean;
   razorpayEnabled: boolean;
   upiScreenshotEnabled: boolean;
-  notifyPhone: string;
-  notifyOnNewBooking: boolean;
+  emailOnBooking: boolean;
 }
 
 export function SettingsForm({
   initial,
   smsReady,
   razorpay,
+  email,
 }: {
   initial: Settings;
   smsReady: boolean;
   /** What the deployment can actually do, as opposed to what the switch says. */
   razorpay: { ready: boolean; webhookReady: boolean; live: boolean };
+  /** Same idea for email: the switch is the owner's, the plumbing is the deployment's. */
+  email: { ready: boolean; address: string };
 }) {
   const [form, setForm] = React.useState(initial);
   const [busy, setBusy] = React.useState(false);
@@ -94,32 +96,30 @@ export function SettingsForm({
       <section className="card">
         <h2 className="font-semibold text-ink-900">Online payment (Razorpay)</h2>
         <p className="mt-1 text-sm text-ink-600">
-          Lets customers pay by card, UPI or netbanking while they book. Those bookings confirm themselves — there is no
-          screenshot for you to check.
+          Customers pay by card, UPI or netbanking while they book, and the booking confirms itself. Nothing for you to
+          check.
         </p>
 
         {!razorpay.ready ? (
           <Alert tone="warning" className="mt-3">
-            No Razorpay keys are connected to this deployment, so this switch does nothing yet. Add them before turning
-            it on.
+            Razorpay is not connected to this site yet, so the boxes below will not do anything. The keys have to be
+            added first.
           </Alert>
         ) : !razorpay.webhookReady ? (
           <Alert tone="warning" className="mt-3">
-            The webhook secret is missing. Payments will still work, but if a customer loses connection just after
-            paying, their booking will not confirm itself. Add RAZORPAY_WEBHOOK_SECRET.
+            Almost set up. Payments will work, but if a customer loses signal right after paying, their booking will not
+            confirm on its own and you will have to do it by hand. Add RAZORPAY_WEBHOOK_SECRET to finish.
           </Alert>
         ) : (
           <Alert tone={razorpay.live ? "warning" : "info"} className="mt-3">
-            {razorpay.live
-              ? "LIVE keys are connected. Payments taken here move real money."
-              : "TEST keys are connected. No real money moves — use Razorpay's test cards."}
+            {razorpay.live ? "Live mode — real money moves." : "Test mode — no real money moves."}
           </Alert>
         )}
 
         <div className="mt-4 space-y-3">
           <Toggle
-            label="Take payments online with Razorpay"
-            hint="Customers pay by card, UPI or netbanking and the booking confirms itself."
+            label="Use Razorpay"
+            hint="Customers pay by card, UPI or netbanking, and the booking confirms itself."
             checked={form.razorpayEnabled}
             onChange={(razorpayEnabled) => set({ razorpayEnabled })}
           />
@@ -127,8 +127,8 @@ export function SettingsForm({
           {/*
             Nested, because it only means anything while the gateway is on, and
             phrased as the thing being switched ON rather than the thing being
-            kept: "accept online only" is the decision the owner is making, and an
-            unticked box is the safe state to land on.
+            kept: "online payment only" is the decision the owner is making, and
+            an unticked box is the safe state to land on.
 
             The stored field is the opposite — upiScreenshotEnabled, defaulting to
             true — so that a settings document written before this existed, or one
@@ -137,8 +137,8 @@ export function SettingsForm({
           */}
           <div className="sm:pl-6">
             <Toggle
-              label="Accept online payments only"
-              hint="Hides the UPI + screenshot option, so customers can only pay by card, UPI or netbanking. Untick it if Razorpay starts giving customers trouble."
+              label="Disable screenshot payment"
+              hint="Customers can only pay through Razorpay. Untick this when Razorpay fails."
               checked={!form.upiScreenshotEnabled}
               onChange={(onlineOnly) => set({ upiScreenshotEnabled: !onlineOnly })}
             />
@@ -146,63 +146,82 @@ export function SettingsForm({
         </div>
 
         {/*
-          The one combination that would take the site off sale. Said as a fact
-          rather than prevented, because the server already ignores the switch in
-          exactly this case — but the owner should know why their change appears
-          to have done nothing.
+          One line for all four combinations, instead of three alerts the owner
+          has to assemble in their head — including the combination that would
+          take the site off sale, which the server already ignores. Saying what
+          customers see right now is the only question these two boxes answer.
         */}
-        {!form.upiScreenshotEnabled && (!form.razorpayEnabled || !razorpay.ready) ? (
-          <Alert tone="warning" className="mt-3">
-            Online payment is not running, so customers are still being offered the UPI screenshot option — otherwise
-            they would have no way to pay at all. This takes effect once Razorpay is switched on above.
-          </Alert>
-        ) : !form.upiScreenshotEnabled ? (
-          <Alert tone="info" className="mt-3">
-            Customers will only be offered card, UPI and netbanking through Razorpay. Nobody can book by sending a
-            screenshot.
-          </Alert>
-        ) : null}
+        <p className="mt-3 rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 text-sm text-ink-700">
+          <span className="font-medium text-ink-900">Right now: </span>
+          {form.razorpayEnabled && razorpay.ready
+            ? form.upiScreenshotEnabled
+              ? "customers choose — pay online, or pay by UPI and send you a screenshot to check."
+              : "customers can only pay online. Nobody can book by sending a screenshot."
+            : form.upiScreenshotEnabled
+              ? "customers pay by UPI and send you a screenshot, and you check each one."
+              : "customers pay by UPI and send you a screenshot. “Disable screenshot payment” does nothing until you tick “Use Razorpay” above."}
+        </p>
+
+        {/*
+          Answers the question every owner asks before touching a live payment
+          switch. True by construction: the verify route and the webhook settle a
+          payment from Razorpay's own record and never read either box.
+        */}
+        <p className="mt-2 text-xs text-ink-500">
+          Safe to change at any time — a customer who is already paying is not affected, and money on its way still
+          lands on their booking.
+        </p>
       </section>
 
       <section className="card">
-        <h2 className="font-semibold text-ink-900">SMS</h2>
+        <h2 className="font-semibold text-ink-900">Notifications</h2>
         <p className="mt-1 text-sm text-ink-600">
-          Both of these send text messages, which your SMS provider charges you for. They start switched off, and
-          nothing is sent until you turn them on.
+          Bookings come to you by email. The only text messages this site sends are the verification codes customers
+          type in while booking.
         </p>
+
+        {!email.ready ? (
+          <Alert tone="warning" className="mt-3">
+            Email is not set up on this site yet, so nothing can be sent to you. RESEND_API_KEY, RESEND_FROM_EMAIL and
+            OWNER_EMAIL have to be added first.
+          </Alert>
+        ) : null}
 
         {!smsReady ? (
           <Alert tone="warning" className="mt-3">
-            No SMS provider is connected yet, so no message can actually be delivered. Add your provider keys to the
-            deployment before switching these on.
+            No SMS provider is connected yet, so no verification code can be delivered. Add your provider keys to the
+            deployment before switching that on.
           </Alert>
         ) : null}
 
         <div className="mt-4 space-y-3">
           <Toggle
+            label="Email me every confirmed booking"
+            hint={
+              email.address
+                ? `One email per booking, sent to ${email.address}, with the customer, the slot and what they paid.`
+                : "One email per booking, with the customer, the slot and what they paid."
+            }
+            checked={form.emailOnBooking}
+            onChange={(emailOnBooking) => set({ emailOnBooking })}
+          />
+          <Toggle
             label="Ask customers to verify their mobile number"
-            hint="Customers get a 4-digit code before they can book. Catches mistyped numbers, so you can always reach them."
+            hint="Customers get a 4-digit code by SMS before they can book. Catches mistyped numbers, so you can always reach them."
             checked={form.otpEnabled}
             onChange={(otpEnabled) => set({ otpEnabled })}
           />
-          <Toggle
-            label="Text me when a booking comes in"
-            hint="One message per new booking, with the reference and the amount."
-            checked={form.notifyOnNewBooking}
-            onChange={(notifyOnNewBooking) => set({ notifyOnNewBooking })}
-          />
         </div>
 
-        {form.notifyOnNewBooking ? (
-          <div className="mt-4 sm:max-w-xs">
-            <Field
-              label="Send alerts to"
-              value={form.notifyPhone}
-              onChange={(notifyPhone) => set({ notifyPhone })}
-              hint="Leave blank to use the support number above."
-            />
-          </div>
-        ) : null}
+        {/*
+          Said plainly because unticking the email box looks like it stops all
+          email, and an owner who thinks that would wonder why customers still
+          thank them for the receipt.
+        */}
+        <p className="mt-2 text-xs text-ink-500">
+          The email box is only about your copy. A customer who types their email address while booking always gets
+          their own, and money problems that need you to act are always emailed whatever this says.
+        </p>
       </section>
 
       {error ? <Alert tone="error">{error}</Alert> : null}
