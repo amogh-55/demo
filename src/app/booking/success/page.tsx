@@ -68,6 +68,13 @@ export default async function BookingSuccessPage() {
    */
   const dueNow = booking.amountDueNow ?? booking.amount;
   const balanceAtGround = Math.max(0, booking.amount - dueNow);
+  /**
+   * What the customer still owes ONLINE, which is the only thing they can act on
+   * from this page. Zero on an advance booking that paid its advance in full —
+   * that customer owes money, but at the gate, and nothing is being asked of
+   * them here.
+   */
+  const shortOnline = Math.max(0, dueNow - booking.amountPaid);
 
   return (
     <div className="min-h-dvh bg-ink-950">
@@ -108,11 +115,21 @@ export default async function BookingSuccessPage() {
             <Row label="Booking total" value={formatCurrency(booking.amount)} strong />
             {balanceAtGround > 0 ? (
               <>
-                <Row label="Paid online" value={formatCurrency(dueNow)} />
+                {/* The label follows the truth. Calling it "Paid online" while the
+                    customer is short of their own advance asserts money that has
+                    not arrived, on the one screen they keep as proof. */}
+                <Row
+                  label={booking.amountPaid >= dueNow ? "Paid online" : "Due online"}
+                  value={formatCurrency(dueNow)}
+                />
                 <Row label="To pay at the ground" value={formatCurrency(balanceAtGround)} strong />
               </>
             ) : null}
-            {booking.amountPaid > 0 ? <Row label="Received so far" value={formatCurrency(booking.amountPaid)} /> : null}
+            {/* Dropped when it would just repeat "Paid online" a line above: four
+                money rows where three say everything reads as a fourth figure. */}
+            {booking.amountPaid > 0 && !(balanceAtGround > 0 && booking.amountPaid === dueNow) ? (
+              <Row label="Received so far" value={formatCurrency(booking.amountPaid)} />
+            ) : null}
             <Row label="Name" value={booking.customerName} />
             <Row label="Mobile" value={`+91 ${booking.customerPhone}`} />
             <Row
@@ -128,20 +145,33 @@ export default async function BookingSuccessPage() {
                     : "Confirmed — payment received"
                   : rejected
                     ? "Payment could not be verified"
-                    : booking.paymentVerificationStatus === "PARTIAL"
-                      ? `Balance of ${formatCurrency(owed)} due`
+                    : shortOnline > 0
+                      ? // What is blocking confirmation, which is the money still
+                        // owed ONLINE. Saying `owed` here quoted ₹600 on a booking
+                        // whose own balance box, directly underneath, asked for
+                        // ₹200 — the other ₹400 being the agreed at-the-gate half.
+                        `Balance of ${formatCurrency(shortOnline)} due`
                       : "Awaiting payment verification"
               }
             />
           </dl>
 
-          {booking.paymentVerificationStatus === "PARTIAL" ? (
+          {/*
+            Short of what was due ONLINE — which is not the same as short of the
+            total.
+
+            An advance booking is PARTIAL by design: the customer paid exactly
+            what was asked and the rest is collected at the gate. Keying this
+            off PARTIAL alone told those customers their slot was "still
+            reserved" and demanded a screenshot, on the same screen as a panel
+            saying their slot was booked and to pay the balance at the counter.
+            Two boxes, opposite instructions.
+          */}
+          {shortOnline > 0 ? (
             <div className="mt-5 rounded-lg border border-amber-400/40 bg-amber-400/15 p-4 text-sm">
-              <p className="font-semibold text-amber-100">
-                Balance due: {formatCurrency(booking.amount - booking.amountPaid)}
-              </p>
+              <p className="font-semibold text-amber-100">Balance due: {formatCurrency(shortOnline)}</p>
               <p className="mt-1 text-amber-100">
-                We received {formatCurrency(booking.amountPaid)} of {formatCurrency(booking.amount)}.{" "}
+                We received {formatCurrency(booking.amountPaid)} of the {formatCurrency(dueNow)} due now.{" "}
                 <strong>Your slot is still reserved.</strong> Please pay the balance and send us the screenshot to
                 confirm your booking.
               </p>
