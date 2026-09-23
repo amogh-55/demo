@@ -1852,6 +1852,71 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(settled.paymentVerificationStatus, "VERIFIED");
     });
 
+    /*
+     * The typo case: 3500 typed where 350 was meant. Found by an end-to-end run
+     * against the live API, where a 700-rupee booking cheerfully accepted 3500
+     * and reported itself paid in full — which is a booking nobody chases and a
+     * bank reconciliation that never balances.
+     */
+    it("refuses to credit more than the booking is owed", async () => {
+      const booking = await pendingBooking();
+      const attempt = booking.payments.find((p) => p.status === "PENDING")!;
+      await assert.rejects(
+        () =>
+          service.reviewPayment({
+            bookingId: booking._id,
+            attemptId: attempt.id,
+            accepted: true,
+            amount: booking.amount * 5,
+            admin: ADMIN,
+          }),
+        /more than this booking is owed/i,
+      );
+
+      const untouched = await collections.bookings(db).findOne({ _id: booking._id });
+      assert.equal(untouched!.amountPaid ?? 0, 0);
+      assert.equal(untouched!.payments.find((p) => p.id === attempt.id)!.status, "PENDING");
+    });
+
+    it("refuses to record more than the booking is owed, and more than is left of it", async () => {
+      const booking = await pendingBooking();
+      await assert.rejects(
+        () => service.recordManualPayment({ bookingId: booking._id, amount: booking.amount + 1, note: "Cash", admin: ADMIN }),
+        /more than this booking is owed/i,
+      );
+
+      // Half paid: the ceiling moves down with it.
+      await acceptPayment(booking, booking.amount / 2);
+      await assert.rejects(
+        () =>
+          service.recordManualPayment({
+            bookingId: booking._id,
+            amount: booking.amount / 2 + 1,
+            note: "Cash",
+            admin: ADMIN,
+          }),
+        /more than this booking is owed/i,
+      );
+
+      // Exactly the balance still goes through.
+      const settled = await service.recordManualPayment({
+        bookingId: booking._id,
+        amount: booking.amount / 2,
+        note: "Cash at the gate",
+        admin: ADMIN,
+      });
+      assert.equal(settled.amountPaid, booking.amount);
+    });
+
+    it("says so plainly when a booking is already paid in full", async () => {
+      const booking = await pendingBooking();
+      await acceptPayment(booking);
+      await assert.rejects(
+        () => service.recordManualPayment({ bookingId: booking._id, amount: 100, note: "Extra cash", admin: ADMIN }),
+        /already paid in full/i,
+      );
+    });
+
     it("refuses a recorded payment that is not a real amount", async () => {
       const booking = await pendingBooking();
       for (const amount of [0, -100, Number.NaN]) {

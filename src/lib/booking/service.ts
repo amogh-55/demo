@@ -1308,6 +1308,38 @@ export function paymentRollupStages(now: Date) {
   ];
 }
 
+/**
+ * Money a booking can still accept, in rupees.
+ *
+ * Nothing may be credited above it. An admin typing 3500 where they meant 350
+ * would otherwise mark a 700-rupee booking as paid five times over — these
+ * totals are what the owner reconciles against the bank, and a booking that
+ * reads as settled is one nobody chases. An overpayment is a refund, not a
+ * credit.
+ */
+const OUTSTANDING = { $subtract: ["$amount", { $ifNull: ["$amountPaid", 0] }] };
+
+/**
+ * Why an accept/record update matched nothing: too much money, or the wrong state.
+ *
+ * Returns the error for the caller to throw, rather than throwing it here, so the
+ * compiler can see that the caller's `updated` is not null past that line.
+ */
+async function paymentRefusal(bookingId: ObjectId, amount: number, fallback: string): Promise<Error> {
+  const db = await getDb();
+  const booking = await collections.bookings(db).findOne({ _id: bookingId });
+  const outstanding = booking ? booking.amount - (booking.amountPaid ?? 0) : 0;
+  if (booking && amount > outstanding) {
+    return appError(
+      "VALIDATION",
+      outstanding > 0
+        ? `That is more than this booking is owed. Rs ${outstanding.toLocaleString("en-IN")} is outstanding.`
+        : "This booking is already paid in full.",
+    );
+  }
+  return appError("CONFLICT", fallback);
+}
+
 export async function reviewPayment(input: {
   bookingId: ObjectId;
   attemptId: string;
@@ -1336,6 +1368,9 @@ export async function reviewPayment(input: {
       _id: input.bookingId,
       status: "PENDING",
       payments: { $elemMatch: { id: input.attemptId, status: "PENDING" } },
+      // Checked in the filter rather than before the call, so two admins reviewing
+      // the same booking at once cannot each be told there is room for their amount.
+      ...(input.accepted ? { $expr: { $lte: [input.amount, OUTSTANDING] } } : {}),
     },
     [
       {
@@ -1373,7 +1408,11 @@ export async function reviewPayment(input: {
   );
 
   if (!updated) {
-    throw appError("CONFLICT", "That payment has already been reviewed, or the booking is no longer pending.");
+    throw await paymentRefusal(
+      input.bookingId,
+      input.accepted ? (input.amount ?? 0) : 0,
+      "That payment has already been reviewed, or the booking is no longer pending.",
+    );
   }
 
   log.info("payment_reviewed", {
@@ -1449,8 +1488,11 @@ export async function recordManualPayment(input: {
          */
         { status: "CONFIRMED", $expr: { $gt: ["$amount", { $ifNull: ["$amountPaid", 0] }] } },
       ],
-      // Same spam ceiling as customer uploads.
-      $expr: { $lt: [{ $size: { $ifNull: ["$payments", []] } }, 10] },
+      // Same spam ceiling as customer uploads, and the same rule about never
+      // crediting more than the booking is owed.
+      $expr: {
+        $and: [{ $lt: [{ $size: { $ifNull: ["$payments", []] } }, 10] }, { $lte: [input.amount, OUTSTANDING] }],
+      },
     },
     [
       {
@@ -1470,7 +1512,7 @@ export async function recordManualPayment(input: {
   );
 
   if (!updated) {
-    throw appError("CONFLICT", "This booking is not waiting for a payment right now.");
+    throw await paymentRefusal(input.bookingId, input.amount, "This booking is not waiting for a payment right now.");
   }
 
   log.info("payment_recorded_by_staff", {

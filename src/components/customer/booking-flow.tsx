@@ -267,22 +267,29 @@ export function BookingFlow({
   const [copied, setCopied] = React.useState(false);
 
   /**
-   * How the customer wants to pay. Online by default where it is available — it
-   * confirms the booking on the spot instead of leaving both sides waiting on an
-   * admin to look at a screenshot — with the screenshot flow one tap away for
-   * anyone whose bank app is being difficult.
+   * How the customer wants to pay, once they have said. `null` means they have
+   * not, and the default below answers for them.
+   *
+   * Null rather than a value chosen at page load, because the owner can switch
+   * online payment on while this page is open: a default fixed at load would
+   * leave the customer looking at a chooser that had appeared mid-visit with the
+   * screenshot route pre-selected.
    */
-  const [method, setMethod] = React.useState<"RAZORPAY" | "UPI_MANUAL">(
-    onlinePaymentReady ? "RAZORPAY" : "UPI_MANUAL",
-  );
+  const [method, setMethod] = React.useState<"RAZORPAY" | "UPI_MANUAL" | null>(null);
   /**
    * What is actually being used, as opposed to what was last picked.
    *
    * Derived rather than corrected in an effect: with the screenshot route
    * withdrawn there is exactly one way to pay, and a stale `method` in state
-   * would otherwise render a UPI form the server is about to refuse.
+   * would otherwise render a UPI form the server is about to refuse. Online is
+   * the default wherever it works — it confirms the booking on the spot instead
+   * of leaving both sides waiting on an admin to look at a screenshot.
    */
-  const method_ = !manualPaymentAllowed ? "RAZORPAY" : onlinePaymentReady ? method : "UPI_MANUAL";
+  const method_ = !manualPaymentAllowed
+    ? "RAZORPAY"
+    : !onlinePaymentReady
+      ? "UPI_MANUAL"
+      : (method ?? "RAZORPAY");
   /**
    * The booking created for an online payment, kept so a retry pays for THAT
    * booking rather than making a second one. This is what makes "pay again" after
@@ -396,6 +403,35 @@ export function BookingFlow({
       window.clearInterval(poll);
     };
   }, [step, loadAvailability]);
+
+  /**
+   * Re-read the payment options on the way into the payment step.
+   *
+   * Which ways to pay are on offer is decided on the SERVER, when this page is
+   * rendered — so a customer who had the page open while the owner switched
+   * Razorpay on is looking at an answer from before the change, and going back to
+   * change their slot does not fix it, because that is all client-side state.
+   *
+   * `router.refresh()` re-runs the server component and hands this one fresh
+   * props; the hold, the typed-in details and everything else in React state
+   * survive it. Repeated on focus as well, since flipping the switch in the admin
+   * tab and coming back to this one is exactly how the owner hits it.
+   */
+  React.useEffect(() => {
+    if (step !== "payment") return;
+
+    const reread = () => {
+      if (document.visibilityState === "visible") router.refresh();
+    };
+
+    reread();
+    window.addEventListener("focus", reread);
+    document.addEventListener("visibilitychange", reread);
+    return () => {
+      window.removeEventListener("focus", reread);
+      document.removeEventListener("visibilitychange", reread);
+    };
+  }, [step, router]);
 
   /** Default the ball to the first on offer so a price is always on screen. */
   React.useEffect(() => {
@@ -866,6 +902,17 @@ export function BookingFlow({
       : null;
 
   const detailsValid = !nameProblem && !phoneProblem && !emailProblem && phoneVerified;
+
+  /**
+   * Which fields the customer has finished with.
+   *
+   * Errors wait for this. Typing "9" into a ten-digit phone box is not a mistake,
+   * it is the first keystroke of one being entered correctly — telling someone
+   * off mid-word reads as the form arguing with them. The message appears when
+   * they leave the field, and disappears the moment they fix it.
+   */
+  const [touched, setTouched] = React.useState<{ name?: boolean; phone?: boolean; email?: boolean }>({});
+  const leave = (field: "name" | "phone" | "email") => () => setTouched((t) => ({ ...t, [field]: true }));
 
   /**
    * Whether the payment step may be submitted, and if not, what is missing.
@@ -1515,14 +1562,15 @@ export function BookingFlow({
                     autoComplete="name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    onBlur={leave("name")}
                     placeholder="Your name"
                     required
-                    // Only once they have typed something: a red box on a field
-                    // nobody has reached yet is a telling-off, not a hint.
-                    aria-invalid={nameProblem && name.length > 0 ? true : undefined}
-                    aria-describedby={nameProblem && name.length > 0 ? "customer-name-error" : undefined}
+                    // Only once they have moved on: a red box under a half-typed
+                    // name is a telling-off, not a hint.
+                    aria-invalid={nameProblem && touched.name ? true : undefined}
+                    aria-describedby={nameProblem && touched.name ? "customer-name-error" : undefined}
                   />
-                  {nameProblem && name.length > 0 ? (
+                  {nameProblem && touched.name ? (
                     <FieldError id="customer-name-error">{nameProblem}</FieldError>
                   ) : null}
                 </div>
@@ -1538,12 +1586,13 @@ export function BookingFlow({
                     autoComplete="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
+                    onBlur={leave("phone")}
                     placeholder="10-digit mobile number"
                     required
-                    aria-invalid={phoneProblem && phone.length > 0 ? true : undefined}
-                    aria-describedby={phoneProblem && phone.length > 0 ? "customer-phone-error" : undefined}
+                    aria-invalid={phoneProblem && touched.phone ? true : undefined}
+                    aria-describedby={phoneProblem && touched.phone ? "customer-phone-error" : undefined}
                   />
-                  {phoneProblem && phone.length > 0 ? (
+                  {phoneProblem && touched.phone ? (
                     <FieldError id="customer-phone-error">{phoneProblem}</FieldError>
                   ) : (
                     <p className="mt-1.5 text-xs text-ink-400">We will confirm your booking on WhatsApp.</p>
@@ -1565,11 +1614,12 @@ export function BookingFlow({
                     autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    onBlur={leave("email")}
                     placeholder="you@example.com"
-                    aria-invalid={emailProblem ? true : undefined}
-                    aria-describedby={emailProblem ? "customer-email-error" : undefined}
+                    aria-invalid={emailProblem && touched.email ? true : undefined}
+                    aria-describedby={emailProblem && touched.email ? "customer-email-error" : undefined}
                   />
-                  {emailProblem ? (
+                  {emailProblem && touched.email ? (
                     <FieldError id="customer-email-error">{emailProblem}</FieldError>
                   ) : (
                     <p className="mt-1.5 text-xs text-ink-400">
@@ -1618,7 +1668,7 @@ export function BookingFlow({
               {/* Named here as well as under the field. On a phone the keyboard
                   covers the inputs, so the only thing the customer can see when
                   they reach for the button is the button. */}
-              {!detailsValid && (name.length > 0 || phone.length > 0) ? (
+              {!detailsValid && (touched.name || touched.phone || touched.email) ? (
                 <p className="mt-4 text-sm font-medium text-amber-300">
                   {nameProblem ?? phoneProblem ?? emailProblem ?? "Verify your mobile number to continue."}
                 </p>
