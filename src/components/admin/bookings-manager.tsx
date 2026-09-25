@@ -13,11 +13,11 @@ import {
   Contrast,
   Copy,
   HandCoins,
+  ListFilter,
   CreditCard,
   ExternalLink,
   Hourglass,
   Image as ImageIcon,
-  MapPin,
   Phone,
   Receipt,
   Search,
@@ -33,6 +33,7 @@ import { Alert, Button, EmptyState, Spinner, StatusBadge, cn, formatCurrency } f
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PaymentReviewDialog, type PaymentAttemptView } from "@/components/admin/payment-review-dialog";
 import { sportEmoji } from "@/lib/sport";
+import { GroundChips } from "@/components/admin/location-filter";
 import { BOOKING_TABS, type BookingTab } from "@/lib/types";
 
 interface AdminBooking {
@@ -136,16 +137,16 @@ export function BookingsManager({
   const [notice, setNotice] = React.useState<string | null>(null);
 
   const queryFor = React.useCallback(
-    (forTab: BookingTab, forPage: number) => {
+    (forGround: string, forPage: number) => {
       const params = new URLSearchParams({ page: String(forPage) });
-      if (locationId) params.set("locationId", locationId);
+      if (forGround) params.set("locationId", forGround);
       if (date) params.set("date", date);
-      if (forTab !== "all") params.set("tab", forTab);
+      if (tab !== "all") params.set("tab", tab);
       if (search.trim()) params.set("search", search.trim());
       if (sport) params.set("sport", sport);
       return `/api/admin/bookings?${params.toString()}`;
     },
-    [locationId, date, search, sport],
+    [date, tab, search, sport],
   );
 
   /**
@@ -156,12 +157,12 @@ export function BookingsManager({
    * trip already waited through once. Emptied after anything the owner changes,
    * so a cached copy can never show a booking in a state it has since left.
    */
-  const seen = React.useRef(new Map<string, ListResponse>([[queryFor(tab, 1), initialList]]));
+  const seen = React.useRef(new Map<string, ListResponse>([[queryFor(locationId, 1), initialList]]));
   /** The query on screen now: an answer that comes back for an older tap is dropped. */
   const current = React.useRef("");
 
   const load = React.useCallback(async () => {
-    const url = queryFor(tab, page);
+    const url = queryFor(locationId, page);
     current.current = url;
     const cached = seen.current.get(url);
     if (cached) setData(cached);
@@ -176,7 +177,7 @@ export function BookingsManager({
     } finally {
       if (current.current === url) setLoading(false);
     }
-  }, [queryFor, tab, page]);
+  }, [queryFor, locationId, page]);
 
   /** Drop every remembered list, then fetch the one on screen. */
   const reload = React.useCallback(async () => {
@@ -185,16 +186,16 @@ export function BookingsManager({
   }, [load]);
 
   /*
-   * The other tabs, fetched quietly once the list is up, so even the first tap
-   * on each is instant. Not while a search is being typed: that would be five
-   * requests a keystroke for lists nobody has asked to see.
+   * The other grounds' tabs, fetched quietly once the list is up, so even the
+   * first tap on each is instant. Not while a search is being typed: that would
+   * be a request per ground per keystroke for lists nobody has asked to see.
    */
   React.useEffect(() => {
     if (search.trim()) return;
     const id = window.setTimeout(() => {
-      for (const t of BOOKING_TABS) {
-        const url = queryFor(t.id, 1);
-        if (t.id === tab || seen.current.has(url)) continue;
+      for (const ground of ["", ...locations.map((l) => l.id)]) {
+        const url = queryFor(ground, 1);
+        if (ground === locationId || seen.current.has(url)) continue;
         api<ListResponse>(url)
           .then((r) => seen.current.set(url, r))
           .catch(() => {
@@ -203,7 +204,7 @@ export function BookingsManager({
       }
     }, 400);
     return () => window.clearTimeout(id);
-    // Only when the filters change, not on every tab tap — the tab is read once.
+    // Only when the other filters change, not on every ground tap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryFor]);
 
@@ -347,8 +348,7 @@ export function BookingsManager({
 
   const bookings = data?.bookings ?? [];
   const counts = data?.counts;
-  const anyFilter = Boolean(locationId || date || sport || search);
-  const groundName = locations.find((l) => l.id === locationId)?.name ?? null;
+  const anyFilter = Boolean(locationId || date || sport || search || tab !== "all");
 
   return (
     <div className="space-y-4">
@@ -399,51 +399,9 @@ export function BookingsManager({
           ) : null}
         </form>
 
-        {/* Scrolls sideways rather than wrapping: five wrapped pills push the first
-            booking off a phone screen. The fade on the right edge is what says
-            there is more to scroll to — without it the strip just looks clipped. */}
-        <div className="relative -mx-4 sm:mx-0">
-          <div
-            role="tablist"
-            aria-label="Booking status"
-            className="flex gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:px-0 [&::-webkit-scrollbar]:hidden"
-          >
-            {BOOKING_TABS.map((t) => {
-              const on = tab === t.id;
-              const n = counts?.[t.id];
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={on}
-                  onClick={() => setTab(t.id)}
-                  className={cn(
-                    "flex h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors",
-                    on ? "bg-pitch-600 text-white shadow-sm" : "text-ink-700 hover:bg-white",
-                  )}
-                >
-                  {t.id === "all" ? "All bookings" : t.label}
-                  {/* The count is the point of the tab: "To verify 4" is a to-do list. */}
-                  {typeof n === "number" ? (
-                    <span
-                      className={cn(
-                        "grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-xs font-bold tabular-nums",
-                        on ? "bg-white text-pitch-700" : TAB_COUNT_TONE[t.id],
-                      )}
-                    >
-                      {n}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-ink-50 to-transparent sm:hidden"
-          />
-        </div>
+        {/* The grounds as buttons: the owner thinks "what is on at Uppal", and one
+            tap beats opening a list. Several can be on at once. */}
+        <GroundChips locations={locations} value={locationId} onChange={setLocationId} />
 
         {/* Three pills, each a native control underneath: the phone's own date
             and list pickers, which are faster to use than anything drawn here. */}
@@ -467,18 +425,24 @@ export function BookingsManager({
               onChange={(e) => setDate(e.target.value)}
             />
           </FilterPill>
-          <FilterPill icon={MapPin} label="Ground" value={groundName}>
+          {/* The count stays on every option — "To verify (2)" is still a to-do list. */}
+          <FilterPill
+            icon={ListFilter}
+            label="Status"
+            value={tab === "all" ? null : `${statusLabel(tab)}${counts ? ` · ${counts[tab]}` : ""}`}
+            badge={tab !== "verify" && counts?.verify ? counts.verify : null}
+          >
             <select
-              id="filter-location"
-              aria-label="Ground"
+              id="filter-status"
+              aria-label="Status"
               className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-              value={locationId}
-              onChange={(e) => setLocationId(e.target.value)}
+              value={tab}
+              onChange={(e) => setTab(e.target.value as BookingTab)}
             >
-              <option value="">All grounds</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
+              {BOOKING_TABS.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {statusLabel(t.id)}
+                  {counts ? ` (${counts[t.id]})` : ""}
                 </option>
               ))}
             </select>
@@ -510,6 +474,7 @@ export function BookingsManager({
                 setDate("");
                 setSport("");
                 setSearch("");
+                setTab("all");
               }}
             >
               <X className="h-4 w-4" aria-hidden="true" />
@@ -629,20 +594,17 @@ export function BookingsManager({
       <ConfirmDialog
         open={pending?.kind === "SETTLE_BALANCE"}
         onOpenChange={() => setPending(null)}
-        title="Collect the rest of the payment?"
+        title={pending ? `Collect ${formatCurrency(pending.booking.amountRemaining)}?` : "Collect payment?"}
         description={
           pending ? (
             <>
-              {pending.booking.customerName} paid {formatCurrency(pending.booking.amountPaid)} online and owes{" "}
-              <strong>{formatCurrency(pending.booking.amountRemaining)}</strong> at the ground.
-              <br />
-              <br />
-              Only press this once the money is actually in your hand. It records the balance and marks the booking{" "}
-              <strong>paid in full</strong>.
+              Make sure {pending.booking.customerName} has paid you{" "}
+              <strong>{formatCurrency(pending.booking.amountRemaining)}</strong> before you tap Collect.
             </>
           ) : null
         }
-        confirmLabel={pending ? `Mark ${formatCurrency(pending.booking.amountRemaining)} collected` : "Mark collected"}
+        cancelTone="danger"
+        confirmLabel={pending ? `Collect ${formatCurrency(pending.booking.amountRemaining)}` : "Collect"}
         busy={busyId !== null}
         error={actionError}
         onConfirm={() => pending && void runAction(pending, "")}
@@ -673,26 +635,22 @@ export function BookingsManager({
   );
 }
 
-/** The count bubble on each tab, coloured like the state it counts. */
-const TAB_COUNT_TONE: Record<BookingTab, string> = {
-  all: "bg-ink-200/70 text-ink-700",
-  pending: "bg-amber-100 text-amber-800",
-  verify: "bg-blue-100 text-blue-700",
-  confirmed: "bg-green-100 text-green-700",
-  rejected: "bg-red-100 text-red-700",
-};
+const statusLabel = (tab: BookingTab) => (tab === "all" ? "All bookings" : BOOKING_TABS.find((t) => t.id === tab)!.label);
 
 /** A dropdown-looking pill with the real native control stretched invisibly over it. */
 function FilterPill({
   icon: Icon,
   label,
   value,
+  badge,
   children,
 }: {
   icon: LucideIcon;
   label: string;
   /** What is chosen, or null to show the label. */
   value: string | null;
+  /** A number that needs the owner, shown as a blue dot-count while something else is chosen. */
+  badge?: number | null;
   children: React.ReactNode;
 }) {
   return (
@@ -705,6 +663,14 @@ function FilterPill({
     >
       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate font-medium">{value ?? label}</span>
+      {badge ? (
+        <span
+          className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-blue-600 px-1 text-[11px] font-bold text-white"
+          aria-label={`${badge} to verify`}
+        >
+          {badge}
+        </span>
+      ) : null}
       <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden="true" />
       {children}
     </div>
@@ -1197,16 +1163,18 @@ function BookingCard({
 
       {/* 4. What to do about it. Same buttons, same rules as always — only the look changed. */}
       <div className="mt-4 flex flex-wrap gap-2">
-        {takesPayment && !collectsBalance ? (
+        {takesPayment && !collectsBalance && isPending ? (
           <Button size="sm" className={ACTION} onClick={onReview} disabled={busy}>
             <BadgeCheck className="h-4 w-4" aria-hidden="true" />
-            {/* A confirmed phone booking is not "under review" — the owner is
-                writing down cash they have already taken. */}
-            {isPending ? "Review payment" : `Collect ${formatCurrency(booking.amountRemaining)}`}
+            Review payment
           </Button>
         ) : null}
 
-        {collectsBalance ? (
+        {/* A confirmed booking with money still to take — a phone booking, a
+            pay-at-the-ground session, the balance of an advance. It is not
+            "under review": the owner is writing down cash in their hand, so it
+            is one short confirm rather than the review dialog. */}
+        {collectsBalance || (takesPayment && !isPending) ? (
           <Button size="sm" className={ACTION} onClick={() => onAction("SETTLE_BALANCE")} disabled={busy}>
             <Banknote className="h-4 w-4" aria-hidden="true" />
             Collect {formatCurrency(booking.amountRemaining)}

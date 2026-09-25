@@ -493,6 +493,7 @@ export const settingsSchema = z.object({
   upiScreenshotEnabled: z.boolean().default(true),
   /** Has no effect without Resend keys and OWNER_EMAIL; the form says so. */
   emailOnBooking: z.boolean().default(true),
+  emailOnPhoneBooking: z.boolean().default(true),
 });
 
 export const adminBookingsQuerySchema = z.object({

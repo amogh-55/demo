@@ -721,6 +721,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(booking.paymentVerificationStatus, "PENDING");
       assert.equal(booking.amount, 720);
       assert.equal(booking.amountPaid, 0);
+      // Nothing is owed ONLINE: the success page asked for a screenshot when this said 720.
+      assert.equal(service.dueOnline(booking), 0);
     });
 
     /** Confirmed means the slots are BOOKED, not merely pending review. */
@@ -1477,6 +1479,27 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(verify.counts.verify, 0);
       const rejected = await listBookings({ page: 1, date, tab: "rejected" });
       assert.deepEqual(rejected.bookings.map((b) => b.reference), [booking.reference]);
+    });
+
+    /** The owner can tick two grounds at once; the list takes them comma-separated. */
+    it("lists the bookings of every ground picked, and only those", async () => {
+      const { listBookings } = await import("../src/lib/booking/admin-list");
+      const date = futureDate(27);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1080, endMin: 1140 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      const refs = async (locationId: string) =>
+        (await listBookings({ page: 1, date, locationId })).bookings.map((b) => b.reference);
+
+      assert.deepEqual(await refs(`${OTHER_LOCATION_ID},${LOCATION_ID}`), [booking.reference]);
+      assert.deepEqual(await refs(`${OTHER_LOCATION_ID}`), []);
+      // A mangled id in the list is dropped, not read as "every ground".
+      assert.deepEqual(await refs(`nonsense,${OTHER_LOCATION_ID}`), []);
     });
 
     it("refuses to block a date that has already passed", async () => {
@@ -3127,6 +3150,8 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     let notify: typeof import("../src/lib/booking/notify");
     const realFetch = globalThis.fetch;
     let sentTo: string[] = [];
+    /** The plain-text part of each email, in the order sent. */
+    let sentText: string[] = [];
 
     before(async () => {
       notify = await import("../src/lib/booking/notify");
@@ -3134,6 +3159,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     beforeEach(() => {
       sentTo = [];
+      sentText = [];
       process.env.RESEND_API_KEY = "re_test_key_not_real";
       process.env.RESEND_FROM_EMAIL = "Turf <onboarding@resend.dev>";
       process.env.OWNER_EMAIL = "owner@example.com";
@@ -3142,8 +3168,9 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input instanceof Request ? input.url : String(input);
         if (url.includes("api.resend.com")) {
-          const body = JSON.parse(String(init?.body ?? "{}")) as { to?: string[] };
+          const body = JSON.parse(String(init?.body ?? "{}")) as { to?: string[]; text?: string };
           sentTo.push(...(body.to ?? []));
+          sentText.push(body.text ?? "");
           return new Response(JSON.stringify({ id: "email_test" }), { status: 200 });
         }
         return realFetch(input, init);
@@ -3189,6 +3216,55 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("still sends the customer their own copy with the owner's switched off", async () => {
       assert.deepEqual(await addressesEmailed(false, "player@example.com"), ["player@example.com"]);
+    });
+
+    /** The owner took ₹200 on the call. The email used to go out before that was recorded, saying ₹0. */
+    it("states the money taken on a phone booking, not ₹0", async () => {
+      await collections
+        .settings(db)
+        .updateOne({ _id: "business" }, { $set: { emailOnBooking: true, emailOnPhoneBooking: true } }, { upsert: true });
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date: futureDate(8),
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        amountPaid: 200,
+        admin: ADMIN,
+      });
+      assert.equal(booking.amountPaid, 200);
+      // createManualBooking does not wait for the send, so wait for it here.
+      for (let i = 0; i < 100 && sentText.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+
+      assert.equal(sentText.length, 1, "exactly one email");
+      const text = sentText[0]!;
+      assert.match(text, /Paid: ₹200/);
+      assert.match(text, /has paid ₹200\. ₹\d[\d,]* is to be collected at the ground/);
+      assert.doesNotMatch(text, /₹0 online/);
+      assert.match(text, /Payment status: Part paid/);
+    });
+
+    /** The owner's own switch for the bookings they took themselves, to save free email quota. */
+    it("skips the owner's copy of a phone booking when that box is unticked, and only that", async () => {
+      await collections
+        .settings(db)
+        .updateOne({ _id: "business" }, { $set: { emailOnBooking: true, emailOnPhoneBooking: false } }, { upsert: true });
+      await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date: futureDate(9),
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        amountPaid: 0,
+        admin: ADMIN,
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      assert.deepEqual(sentTo, [], "no email for the phone booking");
+
+      // A customer's own booking is still emailed with the same settings.
+      assert.deepEqual(await addressesEmailed(true), ["owner@example.com"]);
     });
   });
 });

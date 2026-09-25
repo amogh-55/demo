@@ -64,7 +64,9 @@ export async function listBookings(query: AdminBookingsQuery) {
    * moment you open the Pending tab would be useless.
    */
   const scope: Filter<BookingDoc> = {};
-  if (query.locationId && ObjectId.isValid(query.locationId)) scope.locationId = new ObjectId(query.locationId);
+  // One ground or several, comma-separated; anything that is not an id is ignored.
+  const grounds = (query.locationId ?? "").split(",").filter((id) => ObjectId.isValid(id));
+  if (grounds.length) scope.locationId = { $in: grounds.map((id) => new ObjectId(id)) };
   if (query.date && isValidBusinessDate(query.date)) scope.date = query.date;
   // By name, not id: "Bowling Machine" is two facilities at two grounds, and the
   // owner filtering for it means both.

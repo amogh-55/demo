@@ -4,6 +4,7 @@ import { readSignedCookieValue } from "@/lib/auth";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { buildReceiptPdf, receiptAmount } from "@/lib/receipt-pdf";
+import { dueOnline } from "@/lib/booking/service";
 import { getSettings } from "@/lib/settings";
 import { formatBusinessDate, formatIstTimestamp, formatRange, minutesToDuration } from "@/lib/time";
 
@@ -27,7 +28,7 @@ export async function GET() {
 
     const settings = await getSettings();
     const location = await collections.locations(db).findOne({ _id: booking.locationId });
-    const dueNow = booking.amountDueNow ?? booking.amount;
+    const dueNow = dueOnline(booking);
     const atGround = Math.max(0, booking.amount - Math.max(booking.amountPaid, dueNow));
     const confirmed = booking.status === "CONFIRMED";
 

@@ -2,27 +2,23 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { ObjectId } from "mongodb";
 import {
-  ArrowRight,
   BadgeCheck,
   Ban,
   CalendarCheck,
-  CalendarDays,
   ChevronRight,
   CircleCheck,
   CircleX,
   Clock3,
   Hourglass,
   IndianRupee,
-  MapPin,
   type LucideIcon,
 } from "lucide-react";
-import { getSession } from "@/lib/auth";
 import { TO_VERIFY } from "@/lib/booking/admin-list";
 import { collections, getDb } from "@/lib/db";
-import { sportEmoji } from "@/lib/sport";
-import { formatBusinessDate, formatMinutes, istDateString, istMinutesOfDay, minutesToDuration } from "@/lib/time";
-import { StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
+import { formatMinutes, istDateString, istMinutesOfDay } from "@/lib/time";
+import { cn, formatCurrency } from "@/components/ui/primitives";
 import { LocationFilter } from "@/components/admin/location-filter";
+import { TodayAtTurf } from "@/components/admin/today-at-turf";
 
 export const dynamic = "force-dynamic";
 
@@ -38,43 +34,41 @@ export default async function AdminDashboardPage({
   const nowMin = istMinutesOfDay();
 
   const requested = (await searchParams).locationId ?? "";
-  const [session, locations] = await Promise.all([
-    getSession(),
+  const [locations, facilities] = await Promise.all([
     collections.locations(db).find({}).sort({ name: 1 }).toArray(),
+    collections
+      .facilities(db)
+      .find({ active: true }, { projection: { name: 1, locationId: 1, sortOrder: 1 } })
+      .sort({ sortOrder: 1, name: 1 })
+      .toArray(),
   ]);
-  // An id that is not a real ground falls back to "all", rather than silently
-  // showing zeroes as though the turf had no bookings.
-  const activeId = locations.some((l) => l._id.toHexString() === requested) ? requested : "";
-  const scope = activeId ? { locationId: new ObjectId(activeId) } : {};
+  // One ground or several, comma-separated. An id that is not a real ground is
+  // dropped, rather than silently showing zeroes as though the turf had no bookings.
+  const wanted = requested.split(",");
+  const activeIds = locations.map((l) => l._id.toHexString()).filter((id) => wanted.includes(id));
+  const activeId = activeIds.join(",");
+  const scope = activeIds.length ? { locationId: { $in: activeIds.map((id) => new ObjectId(id)) } } : {};
   const live = { $in: ["PENDING", "CONFIRMED"] as Array<"PENDING" | "CONFIRMED"> };
 
-  const [byStatus, todayBookings, toVerify, blockedUnits, blockedDays, byLocation, takings] = await Promise.all([
+  const [byStatus, todayBookings, toVerify, blockedUnits, blockedDays, takings] = await Promise.all([
     collections
       .bookings(db)
       .aggregate<{ _id: string; count: number }>([{ $match: scope }, { $group: { _id: "$status", count: { $sum: 1 } } }])
       .toArray(),
+    // The whole day, not a sample: this list is what the owner runs the gate from.
     collections
       .bookings(db)
       .find({ ...scope, date: today, status: live })
       .sort({ startMin: 1 })
-      .limit(8)
+      .limit(200)
       .toArray(),
     // The same rule as the To verify tab this card opens, so the two numbers
     // can never disagree.
     collections.bookings(db).countDocuments({ ...scope, ...TO_VERIFY }),
     collections.slotUnits(db).countDocuments({ ...scope, status: "BLOCKED", date: { $gte: today } }),
     collections.dayBlocks(db).countDocuments({ ...scope, date: { $gte: today } }),
-    collections
-      .bookings(db)
-      .aggregate<{ _id: string; count: number }>([
-        { $match: { ...scope, status: live, date: { $gte: today } } },
-        { $group: { _id: "$locationName", count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-      ])
-      .toArray(),
     // Money actually collected for today, which is the number an owner opens the
-    // page to see — and how many bookings that is across, counted in full rather
-    // than read off the eight listed below.
+    // page to see — and how many bookings that is across.
     collections
       .bookings(db)
       .aggregate<{ _id: null; total: number; count: number }>([
@@ -94,51 +88,46 @@ export default async function AdminDashboardPage({
   const next = todayBookings.find((b) => b.endMin > nowMin) ?? null;
   const onNow = next !== null && next.startMin <= nowMin;
 
-  const greeting = nowMin < 12 * 60 ? "Good morning" : nowMin < 17 * 60 ? "Good afternoon" : "Good evening";
-  // The whole name: "Turf Owner" cut to its first word greets the owner as "Turf".
-  const name = session?.displayName.trim() ?? "";
-  const busiest = Math.max(1, ...byLocation.map((l) => l.count));
+  /**
+   * Every sport sold anywhere, once each, and whether the grounds in view sell
+   * it. "Bowling Machine" is one button however many grounds have one.
+   */
+  const sports = [...new Set(facilities.map((f) => f.name))].map((name) => ({
+    name,
+    offered: facilities.some((f) => f.name === name && (!activeId || activeIds.includes(f.locationId.toHexString()))),
+  }));
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <header>
-        <p className="flex items-center gap-1.5 text-sm font-medium text-ink-500">
-          <CalendarDays className="h-4 w-4" aria-hidden="true" />
-          {formatBusinessDate(today)} · {formatMinutes(nowMin)} IST
-        </p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
-          {greeting}
-          {name ? `, ${name}` : ""} 👋
-        </h1>
-      </header>
+    <div className="mx-auto max-w-5xl space-y-4">
+      {/* The tabs and the card already say where the owner is; a greeting and a
+          clock above them only pushed today's games further down the phone. */}
+      <h1 className="sr-only">Dashboard</h1>
 
       {/* Everything below is scoped to the chosen ground, so the filter wraps it:
           while a new ground is loading the figures are dimmed rather than sitting
-          there looking like they belong to the ground now named in the dropdown. */}
+          there looking like they belong to the ground now highlighted. */}
       <LocationFilter
         locations={locations.map((l) => ({ id: l._id.toHexString(), name: l.name }))}
         value={activeId}
       >
-        <div className="space-y-5">
+        <div className="space-y-4">
           {/* Today's money and what is on the turf — the glance before the gates open. */}
-          <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-pitch-600 via-pitch-700 to-pitch-900 p-5 text-white shadow-lg sm:p-7">
-            <FieldLines className="pointer-events-none absolute -right-12 -top-8 h-56 w-80 text-white/[0.08]" />
+          <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-pitch-600 via-pitch-700 to-pitch-900 p-4 text-white shadow-md sm:p-5">
+            <FieldLines className="pointer-events-none absolute -right-10 -top-6 h-40 w-60 text-white/[0.08]" />
             <p className="relative flex items-center gap-2 text-sm font-medium text-pitch-100">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-white/15">
-                <IndianRupee className="h-4 w-4" aria-hidden="true" />
-              </span>
+              <IndianRupee className="h-4 w-4" aria-hidden="true" />
               Collected today
             </p>
-            <p className="relative mt-3 text-4xl font-bold tracking-tight tabular-nums sm:text-5xl">
+            <p className="relative mt-1 text-3xl font-bold tracking-tight tabular-nums sm:text-4xl">
               {formatCurrency(collectedToday)}
             </p>
-            <div className="relative mt-5 flex flex-wrap gap-2 text-sm">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 font-medium">
-                <CalendarCheck className="h-4 w-4" aria-hidden="true" />
+            <div className="relative mt-3 flex flex-wrap gap-1.5 text-xs sm:text-sm">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 font-medium">
+                <CalendarCheck className="h-3.5 w-3.5" aria-hidden="true" />
                 {todayCount} booking{todayCount === 1 ? "" : "s"} today
               </span>
-              <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 font-medium">
-                <Clock3 className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 font-medium">
+                <Clock3 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="truncate">
                   {next
                     ? `${onNow ? "On now" : "Next"}: ${formatMinutes(next.startMin)} · ${next.customerName}`
@@ -185,112 +174,25 @@ export default async function AdminDashboardPage({
             <MiniStat href="/admin/availability" icon={Ban} tone="ink" value={blockedUnits + blockedDays} label="Blocked ahead" />
           </ul>
 
-          <div className="grid gap-5 lg:grid-cols-3">
-            <section className="rounded-2xl border border-ink-200 bg-white p-4 shadow-sm sm:p-5 lg:col-span-2">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="flex items-center gap-2.5 font-semibold text-ink-900">
-                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-pitch-50 text-pitch-700">
-                    <CalendarDays className="h-5 w-5" aria-hidden="true" />
-                  </span>
-                  Today at the turf
-                </h2>
-                <Link
-                  href={`/admin/bookings?date=${today}`}
-                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-pitch-700 hover:bg-pitch-50"
-                >
-                  See all
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </Link>
-              </div>
-
-              {todayBookings.length === 0 ? (
-                <div className="mt-4 flex flex-col items-center rounded-xl bg-ink-50 px-4 py-10 text-center">
-                  <span className="text-3xl" aria-hidden="true">
-                    🏏
-                  </span>
-                  <p className="mt-2 text-sm font-medium text-ink-700">No bookings for today yet.</p>
-                  <p className="text-xs text-ink-500">New ones show up here as they come in.</p>
-                </div>
-              ) : (
-                <ul className="mt-4 space-y-2">
-                  {todayBookings.map((b) => {
-                    const playing = b.startMin <= nowMin && nowMin < b.endMin;
-                    const over = b.endMin <= nowMin;
-                    return (
-                      <li key={b._id.toHexString()}>
-                        <Link
-                          href={`/admin/bookings?search=${b.reference}`}
-                          className={cn(
-                            "flex items-center gap-3 rounded-xl border p-2.5 transition-colors hover:border-pitch-300 hover:bg-pitch-50/50",
-                            playing ? "border-pitch-300 bg-pitch-50/60" : "border-ink-100",
-                            over && "opacity-60",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "w-[4.5rem] shrink-0 rounded-lg px-1 py-1.5 text-center",
-                              playing ? "bg-pitch-600 text-white" : "bg-ink-100 text-ink-800",
-                            )}
-                          >
-                            <span className="block text-sm font-bold tabular-nums">{formatMinutes(b.startMin)}</span>
-                            <span className={cn("block text-[10px] font-medium", playing ? "text-pitch-100" : "text-ink-500")}>
-                              {playing ? "playing now" : minutesToDuration(b.endMin - b.startMin)}
-                            </span>
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-semibold text-ink-900">{b.customerName}</span>
-                            {/* Which court, not just which ground. Two customers on the two
-                                pickleball courts at noon read as the same booking twice
-                                when only the ground is named. */}
-                            <span className="block truncate text-xs text-ink-500">
-                              <span aria-hidden="true">{sportEmoji(b.facilityName)} </span>
-                              {[b.facilityName, b.resourceName !== b.facilityName ? b.resourceName : null, b.locationName]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </span>
-                          </span>
-                          <StatusBadge status={b.status} className="hidden shrink-0 sm:inline-flex" />
-                          <ChevronRight className="h-4 w-4 shrink-0 text-ink-300" aria-hidden="true" />
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </section>
-
-            <section className="rounded-2xl border border-ink-200 bg-white p-4 shadow-sm sm:p-5">
-              <h2 className="flex items-center gap-2.5 font-semibold text-ink-900">
-                <span className="grid h-9 w-9 place-items-center rounded-xl bg-orange-50 text-orange-600">
-                  <MapPin className="h-5 w-5" aria-hidden="true" />
-                </span>
-                Upcoming by ground
-              </h2>
-              {byLocation.length === 0 ? (
-                <p className="mt-4 rounded-xl bg-ink-50 px-4 py-6 text-center text-sm text-ink-500">No upcoming bookings.</p>
-              ) : (
-                <ul className="mt-4 space-y-4">
-                  {byLocation.map((l) => (
-                    <li key={l._id}>
-                      <div className="flex items-baseline justify-between gap-3 text-sm">
-                        <span className="min-w-0 truncate font-medium text-ink-800">{l._id}</span>
-                        <span className="shrink-0 font-bold tabular-nums text-ink-900">
-                          {l.count}
-                          <span className="ml-1 text-xs font-medium text-ink-500">booking{l.count === 1 ? "" : "s"}</span>
-                        </span>
-                      </div>
-                      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-ink-100">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-pitch-400 to-pitch-600"
-                          style={{ width: `${Math.max(6, (l.count / busiest) * 100)}%` }}
-                        />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
+          {/* Keyed by ground so a sport picked at one ground is not left
+              selected — and greyed out — at the next. */}
+          <TodayAtTurf
+            key={activeId || "all"}
+            nowMin={nowMin}
+            sports={sports}
+            seeAllHref={`/admin/bookings?date=${today}${activeId ? `&locationId=${activeId}` : ""}`}
+            bookings={todayBookings.map((b) => ({
+              id: b._id.toHexString(),
+              reference: b.reference,
+              startMin: b.startMin,
+              endMin: b.endMin,
+              customerName: b.customerName,
+              facilityName: b.facilityName ?? "",
+              resourceName: b.resourceName ?? "",
+              locationName: b.locationName,
+              status: b.status,
+            }))}
+          />
         </div>
       </LocationFilter>
     </div>

@@ -15,6 +15,8 @@ export interface ConfirmDialogProps {
   reasonOptions?: string[];
   confirmLabel: string;
   confirmTone?: "primary" | "danger";
+  /** Red when backing out is the careful choice, e.g. before marking money as received. */
+  cancelTone?: "secondary" | "danger";
   busy?: boolean;
   error?: string | null;
   onConfirm: (reason: string) => void;
@@ -33,6 +35,7 @@ export function ConfirmDialog({
   reasonOptions,
   confirmLabel,
   confirmTone = "primary",
+  cancelTone = "secondary",
   busy = false,
   error,
   onConfirm,
@@ -98,7 +101,7 @@ export function ConfirmDialog({
 
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Dialog.Close asChild>
-              <Button variant="secondary" disabled={busy}>
+              <Button variant={cancelTone} disabled={busy}>
                 Cancel
               </Button>
             </Dialog.Close>

@@ -32,7 +32,10 @@ export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void>
   // inbox and a busy ground confirms a lot of bookings. The customer's copy is
   // not: they asked for it by typing their address into the booking form.
   const settings = await getSettings();
-  const toOwner = settings.emailOnBooking ? ownerEmail() : "";
+  // A phone booking has its own switch: the owner took it, so the email only
+  // tells them what they already know, and each one uses up free quota.
+  const ownerWantsIt = settings.emailOnBooking && (!booking.createdBy || settings.emailOnPhoneBooking);
+  const toOwner = ownerWantsIt ? ownerEmail() : "";
   // Nothing to say to anyone: owner copy off or unconfigured, and no customer
   // address given. Checked before the flag is claimed so a later configuration
   // fix still has a booking to email about.
@@ -72,7 +75,7 @@ export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void>
     amountPaid: paid,
     amountRemaining: remaining,
     paymentMethod: describeMethod(booking),
-    paymentStatus: booking.paymentVerificationStatus,
+    paymentStatus: remaining <= 0 ? "Paid in full" : paid > 0 ? "Part paid" : "Not paid yet",
     supportPhone: settings.supportPhone,
   };
 

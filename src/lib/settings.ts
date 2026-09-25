@@ -27,6 +27,8 @@ export const defaultSettings = (): Omit<SettingsDoc, "_id"> => ({
   // On, unlike the SMS switches: email costs nothing to send, and an owner who
   // has gone to the trouble of configuring OWNER_EMAIL wants the bookings.
   emailOnBooking: true,
+  // On, so nothing changes for an owner until they choose to save the emails.
+  emailOnPhoneBooking: true,
   updatedAt: new Date(),
 });
 

@@ -1108,10 +1108,13 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       });
 
       log.info("booking_submitted", { reference, resourceId: resourceId.toHexString(), date, startMin, endMin, amount });
-      // Pay-at-the-ground and phone bookings are confirmed in the same breath as
-      // they are made, so this is their only chance at a confirmation email.
+      // Pay-at-the-ground bookings are confirmed in the same breath as they are
+      // made, so this is their only chance at a confirmation email. A phone
+      // booking is not sent from here: the cash taken on the call is recorded
+      // after this returns, and an email sent now told the owner "₹0 paid" for
+      // money already in their hand. createManualBooking sends it once that is in.
       // Never awaited: a mail provider must not be able to fail a booking.
-      if (booking.status === "CONFIRMED") void notifyBookingConfirmed(booking).catch(() => {});
+      if (booking.status === "CONFIRMED" && !bookedBy) void notifyBookingConfirmed(booking).catch(() => {});
       return booking;
     } catch (err) {
       if (isDuplicateKeyError(err) && attempt < 4) continue; // reference collision — try another
@@ -1145,6 +1148,20 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
  * itself, no payment evidence is required, and the booking is confirmed on the
  * spot — the owner has just agreed it on the phone.
  */
+/**
+ * What the customer has to pay ONLINE.
+ *
+ * Nothing, for a pay-at-the-ground session or a booking staff took by phone.
+ * Their stored `amountDueNow` is the full price, but only to mean "no advance
+ * was taken" — read as "due online" it told a customer booking 40 overs to pay
+ * the balance and send a screenshot, for a session they had just been told to
+ * pay for at the counter. Every customer-facing money line goes through here.
+ */
+export function dueOnline(b: Pick<BookingDoc, "amount" | "amountDueNow" | "payAtVenue" | "createdBy">): number {
+  if (b.payAtVenue || b.createdBy) return 0;
+  return b.amountDueNow ?? b.amount;
+}
+
 export async function createManualBooking(input: {
   resourceId: ObjectId;
   date: string;
@@ -1214,16 +1231,19 @@ export async function createManualBooking(input: {
     admin: input.admin.username,
   });
 
-  if (paid > 0) {
-    return recordManualPayment({
-      bookingId: booking._id,
-      amount: paid,
-      note: input.note || "Collected when the booking was taken over the phone",
-      admin: input.admin,
-    });
-  }
+  const final =
+    paid > 0
+      ? await recordManualPayment({
+          bookingId: booking._id,
+          amount: paid,
+          note: input.note || "Collected when the booking was taken over the phone",
+          admin: input.admin,
+        })
+      : booking;
 
-  return booking;
+  // Only now, with what was collected on the booking, so the email states it.
+  void notifyBookingConfirmed(final).catch(() => {});
+  return final;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────

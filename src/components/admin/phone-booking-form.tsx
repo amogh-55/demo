@@ -233,14 +233,26 @@ export function PhoneBookingForm({
   const whoValid = name.trim().length >= 2 && /^[6-9]\d{9}$/.test(phoneDigits);
   const canSave = !saving && contiguous && whoValid && collectedValid && (!isOvers || Boolean(ballTypeId));
 
+  /**
+   * The same rule as the customer's booking page: tap where it starts, then tap
+   * where it ends, and everything between is taken — 6 AM then 10 AM is 6 to 11.
+   * Tapping one hour at a time used to leave gaps the owner then had to fill in
+   * by hand. Only extends over hours that are all free; any other tap starts
+   * again from the hour tapped, and tapping a lone chosen hour clears it.
+   */
   function pickUnit(startMin: number) {
-    setPicked((current) =>
-      isOvers
-        ? [startMin]
-        : current.includes(startMin)
-          ? current.filter((m) => m !== startMin)
-          : [...current, startMin],
-    );
+    if (isOvers) return setPicked([startMin]);
+    setPicked((current) => {
+      if (current.length === 0) return [startMin];
+      const first = Math.min(...current);
+      const last = Math.max(...current);
+      if (current.length === 1 && startMin === first) return [];
+      if (startMin > last) {
+        const run = units.filter((u) => u.startMin >= first && u.startMin <= startMin);
+        if (run.every((u) => u.status === "AVAILABLE")) return run.map((u) => u.startMin);
+      }
+      return [startMin];
+    });
   }
 
   async function save() {

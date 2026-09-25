@@ -55,6 +55,7 @@ export default async function AdminSettingsPage() {
           razorpayEnabled: settings.razorpayEnabled,
           upiScreenshotEnabled: settings.upiScreenshotEnabled,
           emailOnBooking: settings.emailOnBooking,
+          emailOnPhoneBooking: settings.emailOnPhoneBooking,
         }}
       >
         {locations.length === 0 ? (

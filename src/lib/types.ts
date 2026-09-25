@@ -495,6 +495,12 @@ export interface SettingsDoc {
    * Has no effect unless Resend and OWNER_EMAIL are configured.
    */
   emailOnBooking: boolean;
+  /**
+   * Whether the owner's copy also goes out for a booking they took over the
+   * phone themselves. Separate because they already know about those, and the
+   * email service's free allowance is better spent on the ones they do not.
+   */
+  emailOnPhoneBooking: boolean;
   updatedAt: Date;
 }
 

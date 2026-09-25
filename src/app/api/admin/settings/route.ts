@@ -22,6 +22,7 @@ export async function GET() {
         razorpayEnabled: settings.razorpayEnabled,
         upiScreenshotEnabled: settings.upiScreenshotEnabled,
         emailOnBooking: settings.emailOnBooking,
+        emailOnPhoneBooking: settings.emailOnPhoneBooking,
       },
     });
   } catch (err) {
@@ -45,6 +46,7 @@ export async function PUT(request: Request) {
         razorpayEnabled: saved.razorpayEnabled,
         upiScreenshotEnabled: saved.upiScreenshotEnabled,
         emailOnBooking: saved.emailOnBooking,
+        emailOnPhoneBooking: saved.emailOnPhoneBooking,
       },
     });
   } catch (err) {

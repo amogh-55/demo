@@ -5,6 +5,7 @@ import { CheckCircle2 } from "lucide-react";
 import { LAST_BOOKING_COOKIE } from "@/lib/api";
 import { readSignedCookieValue } from "@/lib/auth";
 import { collections, getDb } from "@/lib/db";
+import { dueOnline } from "@/lib/booking/service";
 import { getSettings } from "@/lib/settings";
 import { formatBusinessDate, formatIstTimestamp, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, formatCurrency } from "@/components/ui/primitives";
@@ -66,7 +67,7 @@ export default async function BookingSuccessPage() {
    * is "received" yet, so the balance cannot be read off amountPaid — this is the
    * only record of the arrangement they actually made.
    */
-  const dueNow = booking.amountDueNow ?? booking.amount;
+  const dueNow = dueOnline(booking);
   const balanceAtGround = Math.max(0, booking.amount - dueNow);
   /**
    * What the customer still owes ONLINE, which is the only thing they can act on
@@ -118,10 +119,13 @@ export default async function BookingSuccessPage() {
                 {/* The label follows the truth. Calling it "Paid online" while the
                     customer is short of their own advance asserts money that has
                     not arrived, on the one screen they keep as proof. */}
-                <Row
-                  label={booking.amountPaid >= dueNow ? "Paid online" : "Due online"}
-                  value={formatCurrency(dueNow)}
-                />
+                {/* Not on a pay-at-the-ground session, where "Paid online ₹0" is noise. */}
+                {dueNow > 0 ? (
+                  <Row
+                    label={booking.amountPaid >= dueNow ? "Paid online" : "Due online"}
+                    value={formatCurrency(dueNow)}
+                  />
+                ) : null}
                 <Row label="To pay at the ground" value={formatCurrency(balanceAtGround)} strong />
               </>
             ) : null}

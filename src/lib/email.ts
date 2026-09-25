@@ -179,9 +179,13 @@ export function ownerBookingEmail(facts: BookingEmailFacts): Omit<EmailMessage, 
   const { html, text } = render(
     facts,
     "New confirmed booking",
-    facts.amountRemaining > 0
-      ? `${facts.customerName} has paid ${rupees(facts.amountPaid)} online. ${rupees(facts.amountRemaining)} is to be collected at the ground.`
-      : `${facts.customerName} has paid in full.`,
+    // Not "online": a phone booking's money was taken in cash or UPI on the
+    // call, and a pay-at-the-ground one has none yet.
+    facts.amountRemaining <= 0
+      ? `${facts.customerName} has paid in full.`
+      : facts.amountPaid > 0
+        ? `${facts.customerName} has paid ${rupees(facts.amountPaid)}. ${rupees(facts.amountRemaining)} is to be collected at the ground.`
+        : `Nothing paid yet. ${rupees(facts.amountRemaining)} is to be collected at the ground.`,
   );
   return {
     subject: `${facts.reference} — ${facts.date} ${facts.time} — ${facts.locationName}`,

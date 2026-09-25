@@ -64,6 +64,15 @@
       disabled:cursor-not-allowed disabled:opacity-60;
   }
 
+  /* iPhone Safari gives a date box a built-in width wider than a phone column,
+     so it pushed out past the edge of its card, and centred the date inside it. */
+  .field-input:is([type="date"], [type="time"]) {
+    @apply min-w-0 appearance-none text-left;
+  }
+  .field-input::-webkit-date-and-time-value {
+    text-align: left;
+  }
+
   /* A field the form will not accept. Driven off aria-invalid so the outline and
      the screen-reader state can never disagree — one attribute sets both. */
   .field-input[aria-invalid="true"] {

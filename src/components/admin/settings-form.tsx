@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { api, errorMessage } from "@/lib/client";
-import { Alert, Button, Spinner } from "@/components/ui/primitives";
+import { Alert, Button, Spinner, cn } from "@/components/ui/primitives";
 
 interface Settings {
   businessName: string;
@@ -15,6 +15,7 @@ interface Settings {
   razorpayEnabled: boolean;
   upiScreenshotEnabled: boolean;
   emailOnBooking: boolean;
+  emailOnPhoneBooking: boolean;
 }
 
 /** The Business card saves on its own; everything else is the payments-and-notifications half. */
@@ -242,6 +243,16 @@ export function SettingsForm({
               checked={form.emailOnBooking}
               onChange={(emailOnBooking) => set({ emailOnBooking })}
             />
+            {/* Under the main switch, because it only means anything while that is on. */}
+            <div className="sm:pl-6">
+              <Toggle
+                label="Email me phone bookings too"
+                hint="Untick to save your free email allowance: you took these bookings yourself, so you already know about them."
+                checked={form.emailOnBooking && form.emailOnPhoneBooking}
+                disabled={!form.emailOnBooking}
+                onChange={(emailOnPhoneBooking) => set({ emailOnPhoneBooking })}
+              />
+            </div>
             <Toggle
               label="Ask customers to verify their mobile number"
               hint="Customers get a 4-digit code by SMS before they can book. Catches mistyped numbers, so you can always reach them."
@@ -272,24 +283,30 @@ function Toggle({
   label,
   hint,
   checked,
+  disabled = false,
   onChange,
 }: {
   label: string;
   hint: string;
   checked: boolean;
+  disabled?: boolean;
   onChange: (checked: boolean) => void;
 }) {
   const id = React.useId();
   return (
     <label
       htmlFor={id}
-      className="flex cursor-pointer items-start gap-3 rounded-lg border border-ink-200 p-3 transition-colors hover:bg-ink-50"
+      className={cn(
+        "flex items-start gap-3 rounded-lg border border-ink-200 p-3 transition-colors",
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-ink-50",
+      )}
     >
       <input
         id={id}
         type="checkbox"
         className="mt-0.5 h-5 w-5 shrink-0 accent-pitch-600"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="min-w-0">

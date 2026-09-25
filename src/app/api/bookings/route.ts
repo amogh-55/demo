@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { fail, HOLD_COOKIE, LAST_BOOKING_COOKIE, ok, readJson, UPLOAD_FAILED_COOKIE } from "@/lib/api";
 import { signCookieValue } from "@/lib/auth";
-import { submitBooking } from "@/lib/booking/service";
+import { dueOnline, submitBooking } from "@/lib/booking/service";
 import { uploadFailureProven } from "@/lib/booking/upload-failure";
 import { appError } from "@/lib/errors";
 import { OTP_COOKIE, readVerifiedPhone } from "@/lib/otp";
@@ -109,7 +109,7 @@ export async function POST(request: Request) {
       overs: booking.overs,
       ballTypeName: booking.ballTypeName,
       amount: booking.amount,
-      amountDueNow: booking.amountDueNow ?? booking.amount,
+      amountDueNow: dueOnline(booking),
       customerPhone: booking.customerPhone,
       // The browser needs to know whether to open checkout next, or whether the
       // booking is already finished with (a pay-at-the-ground session).
