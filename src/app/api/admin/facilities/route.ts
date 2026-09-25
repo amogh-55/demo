@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
@@ -100,6 +101,7 @@ export async function POST(request: Request) {
     // dropped now the write has landed — the owner sees their own edit at
     // once rather than whenever the short TTL happens to lapse.
     forgetResourceContext();
+    revalidatePath("/"); // the home page advertises this
     return ok({ id: _id.toHexString() });
   } catch (err) {
     return fail(err, { route: "POST /api/admin/facilities" });

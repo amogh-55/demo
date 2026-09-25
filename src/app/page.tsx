@@ -27,7 +27,16 @@ import { GroundsShowcase } from "@/components/customer/grounds-showcase";
 import { ScrollToTop, SiteHeader } from "@/components/customer/site-chrome";
 import { whatsappUrl } from "@/lib/whatsapp";
 
-export const dynamic = "force-dynamic";
+/*
+ * Built once and served from Vercel's edge cache, not rendered per visit.
+ *
+ * Nothing on this page depends on who is looking at it, and it was the first
+ * thing every customer waited for: a server start and a database read before a
+ * single pixel. Any change in the admin panel to a ground, a price or the
+ * business details rebuilds it at once (revalidatePath in those routes); the
+ * interval is only a backstop for data changed outside the app, by a script.
+ */
+export const revalidate = 300;
 
 const FACILITIES = [
   { icon: Lightbulb, title: "Floodlights", body: "LED masts with no shadows on the crease. Play as late as you like." },

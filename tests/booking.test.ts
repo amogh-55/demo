@@ -1447,6 +1447,38 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       );
     });
 
+    /** The rain case: the owner blocks a slot whose screenshot nobody had checked yet. */
+    it("moves a booking rejected by a block out of the To verify queue", async () => {
+      const { listBookings } = await import("../src/lib/booking/admin-list");
+      const date = futureDate(26);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin: 1080, endMin: 1140 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      const before = await listBookings({ page: 1, date, tab: "verify" });
+      assert.deepEqual(before.bookings.map((b) => b.reference), [booking.reference]);
+
+      await service.blockSlots({
+        resourceId: RESOURCE_ID,
+        date,
+        startMin: 1080,
+        endMin: 1140,
+        reason: "Weather",
+        force: true,
+        admin: ADMIN,
+      });
+
+      const verify = await listBookings({ page: 1, date, tab: "verify" });
+      assert.equal(verify.bookings.length, 0);
+      assert.equal(verify.counts.verify, 0);
+      const rejected = await listBookings({ page: 1, date, tab: "rejected" });
+      assert.deepEqual(rejected.bookings.map((b) => b.reference), [booking.reference]);
+    });
+
     it("refuses to block a date that has already passed", async () => {
       const date = pastDate();
       await assert.rejects(

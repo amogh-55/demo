@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
     // owner adds the box, the nets or the courts themselves. Until they do, the
     // location has nothing bookable and is hidden from customers rather than
     // offered as an empty page.
+    revalidatePath("/"); // the home page advertises this
     return ok({ id: _id.toHexString() });
   } catch (err) {
     return fail(err, { route: "POST /api/admin/locations" });

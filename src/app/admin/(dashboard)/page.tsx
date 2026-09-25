@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { getSession } from "@/lib/auth";
+import { TO_VERIFY } from "@/lib/booking/admin-list";
 import { collections, getDb } from "@/lib/db";
 import { sportEmoji } from "@/lib/sport";
 import { formatBusinessDate, formatMinutes, istDateString, istMinutesOfDay, minutesToDuration } from "@/lib/time";
@@ -60,7 +61,7 @@ export default async function AdminDashboardPage({
       .toArray(),
     // The same rule as the To verify tab this card opens, so the two numbers
     // can never disagree.
-    collections.bookings(db).countDocuments({ ...scope, "payments.status": "PENDING" }),
+    collections.bookings(db).countDocuments({ ...scope, ...TO_VERIFY }),
     collections.slotUnits(db).countDocuments({ ...scope, status: "BLOCKED", date: { $gte: today } }),
     collections.dayBlocks(db).countDocuments({ ...scope, date: { $gte: today } }),
     collections

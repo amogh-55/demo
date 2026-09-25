@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { fail, ok, readJson } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
 import { getSettings, saveSettings } from "@/lib/settings";
@@ -36,6 +37,7 @@ export async function PUT(request: Request) {
     // The UPI id itself is scrubbed by the logger; only the fact of a change is recorded.
     // The SMS switches ARE recorded by value: turning them on starts spending the
     // owner's money, so who did it and when belongs in the audit trail.
+    revalidatePath("/"); // the home page advertises this
     return ok({
       saved: true,
       settings: {

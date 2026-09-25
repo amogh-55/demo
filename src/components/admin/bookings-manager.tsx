@@ -12,6 +12,7 @@ import {
   Clock3,
   Contrast,
   Copy,
+  HandCoins,
   CreditCard,
   ExternalLink,
   Hourglass,
@@ -31,7 +32,6 @@ import { formatBusinessDate, formatIstTimestamp, formatRange, minutesToDuration 
 import { Alert, Button, EmptyState, Spinner, StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PaymentReviewDialog, type PaymentAttemptView } from "@/components/admin/payment-review-dialog";
-import { ManualBookingDialog, type ManualBookingFacility } from "@/components/admin/manual-booking-dialog";
 import { sportEmoji } from "@/lib/sport";
 import { BOOKING_TABS, type BookingTab } from "@/lib/types";
 
@@ -96,14 +96,14 @@ const REJECT_REASONS = ["Customer cancelled", "Customer not reachable", "Duplica
 
 export function BookingsManager({
   locations,
-  facilities,
+  sports,
   today,
   initialFilters,
   initialList,
 }: {
   locations: Array<{ id: string; name: string }>;
-  /** Everything bookable, for the phone-booking dialog. */
-  facilities: ManualBookingFacility[];
+  /** Every service name, once each however many grounds sell it — the Sport filter. */
+  sports: string[];
   /** Today in Asia/Kolkata, from the server — never the admin's device clock. */
   today: string;
   initialFilters: {
@@ -135,23 +135,77 @@ export function BookingsManager({
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    setListError(null);
-    try {
-      const params = new URLSearchParams({ page: String(page) });
+  const queryFor = React.useCallback(
+    (forTab: BookingTab, forPage: number) => {
+      const params = new URLSearchParams({ page: String(forPage) });
       if (locationId) params.set("locationId", locationId);
       if (date) params.set("date", date);
-      if (tab !== "all") params.set("tab", tab);
+      if (forTab !== "all") params.set("tab", forTab);
       if (search.trim()) params.set("search", search.trim());
       if (sport) params.set("sport", sport);
-      setData(await api<ListResponse>(`/api/admin/bookings?${params.toString()}`));
+      return `/api/admin/bookings?${params.toString()}`;
+    },
+    [locationId, date, search, sport],
+  );
+
+  /**
+   * Every list already fetched, by its query.
+   *
+   * A tab the owner has seen once shows its last answer the instant it is tapped
+   * and is refreshed underneath, instead of blanking to a spinner for a round
+   * trip already waited through once. Emptied after anything the owner changes,
+   * so a cached copy can never show a booking in a state it has since left.
+   */
+  const seen = React.useRef(new Map<string, ListResponse>([[queryFor(tab, 1), initialList]]));
+  /** The query on screen now: an answer that comes back for an older tap is dropped. */
+  const current = React.useRef("");
+
+  const load = React.useCallback(async () => {
+    const url = queryFor(tab, page);
+    current.current = url;
+    const cached = seen.current.get(url);
+    if (cached) setData(cached);
+    else setLoading(true);
+    setListError(null);
+    try {
+      const fresh = await api<ListResponse>(url);
+      seen.current.set(url, fresh);
+      if (current.current === url) setData(fresh);
     } catch (err) {
-      setListError(errorMessage(err));
+      if (current.current === url) setListError(errorMessage(err));
     } finally {
-      setLoading(false);
+      if (current.current === url) setLoading(false);
     }
-  }, [locationId, date, tab, search, sport, page]);
+  }, [queryFor, tab, page]);
+
+  /** Drop every remembered list, then fetch the one on screen. */
+  const reload = React.useCallback(async () => {
+    seen.current.clear();
+    await load();
+  }, [load]);
+
+  /*
+   * The other tabs, fetched quietly once the list is up, so even the first tap
+   * on each is instant. Not while a search is being typed: that would be five
+   * requests a keystroke for lists nobody has asked to see.
+   */
+  React.useEffect(() => {
+    if (search.trim()) return;
+    const id = window.setTimeout(() => {
+      for (const t of BOOKING_TABS) {
+        const url = queryFor(t.id, 1);
+        if (t.id === tab || seen.current.has(url)) continue;
+        api<ListResponse>(url)
+          .then((r) => seen.current.set(url, r))
+          .catch(() => {
+            // A tab that could not be fetched ahead is simply fetched when tapped.
+          });
+      }
+    }, 400);
+    return () => window.clearTimeout(id);
+    // Only when the filters change, not on every tab tap — the tab is read once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryFor]);
 
   /**
    * The list the server already rendered is the list for the filters the page
@@ -192,7 +246,7 @@ export function BookingsManager({
         });
         setPending(null);
         setNotice(`Booking ${action.booking.reference} is now paid in full.`);
-        await load();
+        await reload();
         announceChange();
         return;
       }
@@ -205,7 +259,7 @@ export function BookingsManager({
           ? `Booking ${action.booking.reference} confirmed.`
           : `Booking ${action.booking.reference} rejected and its slots released.`,
       );
-      await load();
+      await reload();
       announceChange();
     } catch (err) {
       setActionError(errorMessage(err));
@@ -261,7 +315,7 @@ export function BookingsManager({
               : `${booking.reference}: paid in full. You can confirm the booking now.`,
       );
       setReviewing(null);
-      await load();
+      await reload();
       announceChange();
     } catch (err) {
       setActionError(errorMessage(err));
@@ -294,41 +348,31 @@ export function BookingsManager({
   const bookings = data?.bookings ?? [];
   const counts = data?.counts;
   const anyFilter = Boolean(locationId || date || sport || search);
-  /** One entry per sport, however many grounds sell it. */
-  const sports = [...new Set(facilities.map((f) => f.name))].sort();
   const groundName = locations.find((l) => l.id === locationId)?.name ?? null;
-
-  const addBooking =
-    facilities.length > 0 ? (
-      <ManualBookingDialog
-        locations={locations}
-        facilities={facilities}
-        today={today}
-        onCreated={(message) => {
-          setActionError(null);
-          setNotice(message);
-          void load();
-          announceChange();
-        }}
-      />
-    ) : null;
 
   return (
     <div className="space-y-4">
-      {/* The title and the one thing the owner comes here to ADD share a row, so
-          the button sits top-right where it is looked for. It goes full width
-          under the title on a phone, where a small right-aligned button is a
-          thumb-miss. */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-ink-900">Bookings</h1>
-          <p className="text-sm text-ink-600">Verify payments, accept or reject requests.</p>
-        </div>
-        {addBooking}
+      {/* Taking a booking over the phone has its own tab now; this one is for
+          working through the ones that already exist. */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-ink-900">Bookings</h1>
+        <p className="text-sm text-ink-600">Verify payments, accept or reject requests.</p>
       </div>
 
       <section className="space-y-3" aria-label="Find bookings">
-        <div className="relative">
+        {/*
+          A form only so the phone keyboard shows a Search key. The list already
+          follows the typing, so pressing it just puts the keyboard away and the
+          results — which it was covering — into view.
+        */}
+        <form
+          role="search"
+          className="relative"
+          onSubmit={(e) => {
+            e.preventDefault();
+            (document.activeElement as HTMLElement | null)?.blur();
+          }}
+        >
           <Search
             className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400"
             aria-hidden="true"
@@ -338,6 +382,8 @@ export function BookingsManager({
             className="field-input h-12 rounded-xl pl-10 pr-10 text-base shadow-sm"
             placeholder="Search name, phone, reference or UTR"
             aria-label="Search bookings"
+            enterKeyHint="search"
+            autoComplete="off"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -351,7 +397,7 @@ export function BookingsManager({
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
           ) : null}
-        </div>
+        </form>
 
         {/* Scrolls sideways rather than wrapping: five wrapped pills push the first
             booking off a phone screen. The fade on the right edge is what says
@@ -596,7 +642,7 @@ export function BookingsManager({
             </>
           ) : null
         }
-        confirmLabel={pending ? `Record ${formatCurrency(pending.booking.amountRemaining)}` : "Record balance"}
+        confirmLabel={pending ? `Mark ${formatCurrency(pending.booking.amountRemaining)} collected` : "Mark collected"}
         busy={busyId !== null}
         error={actionError}
         onConfirm={() => pending && void runAction(pending, "")}
@@ -725,10 +771,11 @@ const LOOK_STYLE: Record<Look, { accent: string; avatar: string }> = {
   dead: { accent: "bg-ink-300", avatar: "bg-ink-100 text-ink-500" },
 };
 
-type PanelTone = "green" | "blue" | "orange" | "grey" | "red";
+type PanelTone = "green" | "amber" | "blue" | "orange" | "grey" | "red";
 
 const PANEL_STYLE: Record<PanelTone, { box: string; tile: string; title: string; amount: string }> = {
   green: { box: "border-green-200 bg-green-50", tile: "bg-green-100 text-green-700", title: "text-green-900", amount: "text-green-800" },
+  amber: { box: "border-amber-300 bg-amber-50", tile: "bg-amber-100 text-amber-700", title: "text-amber-900", amount: "text-amber-900" },
   blue: { box: "border-blue-200 bg-blue-50", tile: "bg-blue-100 text-blue-700", title: "text-blue-900", amount: "text-blue-800" },
   orange: { box: "border-orange-200 bg-orange-50", tile: "bg-orange-100 text-orange-700", title: "text-orange-900", amount: "text-orange-800" },
   grey: { box: "border-ink-200 bg-ink-50", tile: "bg-white text-ink-500", title: "text-ink-800", amount: "text-ink-800" },
@@ -745,6 +792,10 @@ interface Panel {
   caption: string;
   /** A second figure under the first, e.g. the balance still due. */
   second?: string;
+  /** Replaces the UTR / payment-method line under the title. */
+  sub?: string;
+  /** Money still to take from the customer at the ground, said on its own line. */
+  collect?: number;
 }
 
 /** The money strip, in the owner's words — built on the same summary as before. */
@@ -762,24 +813,37 @@ function moneyPanel(b: AdminBooking, look: Look, money: ReturnType<typeof paymen
   }
   switch (money.tone) {
     case "paid":
-      return { tone: "green", icon: CreditCard, title: "Payment verified", verified: true, big: formatCurrency(b.amountPaid), caption: "paid" };
+      return {
+        tone: "green",
+        icon: CreditCard,
+        title: "Fully paid",
+        verified: true,
+        big: formatCurrency(b.amountPaid),
+        caption: "paid",
+        sub: "Nothing to collect",
+      };
+    // Yellow, not green: money is still owed, and it is the owner who has to
+    // take it off the customer at the gate.
     case "advance":
       return b.amountPaid > 0
         ? {
-            tone: "green",
+            tone: "amber",
             icon: Wallet,
-            title: "Advance paid",
-            verified: true,
+            // "Half" only when it is exactly half; an advance set at some other
+            // share would be misdescribed by it.
+            title: b.amountPaid * 2 === b.amount ? "Half paid" : "Part paid",
             big: formatCurrency(b.amountPaid),
             caption: "received",
-            second: `${formatCurrency(atGround)} at the ground`,
+            collect: atGround,
           }
         : {
-            tone: "green",
+            tone: "amber",
             icon: Banknote,
             title: b.createdBy ? "Booked by phone" : "Pay at the ground",
-            big: formatCurrency(atGround),
-            caption: "to collect",
+            big: formatCurrency(b.amount),
+            caption: "total",
+            sub: "Nothing paid yet",
+            collect: atGround,
           };
     case "short":
       return {
@@ -829,12 +893,12 @@ function StatePill({ booking, look }: { booking: AdminBooking; look: Look }) {
   }[look];
 
   return (
-    <span className={cn("inline-flex shrink-0 flex-col items-end rounded-2xl px-3 py-1.5 text-right ring-1 ring-inset", pill.tone)}>
-      <span className="flex items-center gap-1.5 whitespace-nowrap text-[13px] font-semibold">
-        <pill.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+    <span className={cn("inline-flex shrink-0 flex-col items-end rounded-xl px-2 py-0.5 text-right ring-1 ring-inset", pill.tone)}>
+      <span className="flex items-center gap-1 whitespace-nowrap text-xs font-semibold leading-5">
+        <pill.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         {pill.label}
       </span>
-      {pill.sub ? <span className="whitespace-nowrap text-[11px] font-medium opacity-80">{pill.sub}</span> : null}
+      {pill.sub ? <span className="whitespace-nowrap text-[10px] font-medium leading-4 opacity-80">{pill.sub}</span> : null}
     </span>
   );
 }
@@ -877,8 +941,13 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 
-/** Two per row on a phone rather than a stack of full-width bars, which pushed the next booking off the screen. */
-const ACTION = "h-11 min-w-[9.5rem] flex-1 rounded-xl sm:h-10 sm:min-w-0 sm:flex-none sm:px-5";
+/**
+ * Two per row on a phone rather than a stack of full-width bars, which pushed the
+ * next booking off the screen. Each starts at its own label's width and never
+ * shrinks below it: an equal split squeezed "Confirm via WhatsApp" until its
+ * icon and ends were cut off. One that does not fit takes the next row instead.
+ */
+const ACTION = "h-11 flex-[1_0_auto] rounded-xl sm:h-10 sm:flex-none sm:px-5";
 const SOFT_GREEN =
   "theme-light:border-green-200 theme-light:bg-green-100 theme-light:text-green-800 theme-light:hover:bg-green-200";
 const SOFT_RED = "theme-light:border-red-200 theme-light:bg-red-50 theme-light:text-red-700 theme-light:hover:bg-red-100";
@@ -970,7 +1039,7 @@ function BookingCard({
             <p className="min-w-0 truncate pt-1 text-lg font-bold leading-tight text-ink-900">{booking.customerName}</p>
             <StatePill booking={booking} look={look} />
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-ink-600">
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-600">
             <a
               href={`tel:+91${booking.customerPhone}`}
               className="inline-flex items-center gap-1.5 whitespace-nowrap font-medium hover:text-pitch-700"
@@ -978,19 +1047,6 @@ function BookingCard({
               <Phone className="h-3.5 w-3.5 text-ink-400" aria-hidden="true" />
               +91 {booking.customerPhone}
             </a>
-            {/* Opens the chat only. Nothing is typed or sent from here. */}
-            <a
-              href={`https://wa.me/91${booking.customerPhone}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Open a WhatsApp chat with ${booking.customerName}`}
-              className="-my-1 grid h-8 w-8 place-items-center rounded-full text-[#25D366] hover:bg-green-50"
-            >
-              <WhatsAppIcon className="h-[18px] w-[18px]" />
-            </a>
-            <span aria-hidden="true" className="text-ink-300">
-              ·
-            </span>
             <CopyReference reference={booking.reference} />
           </div>
         </div>
@@ -1032,7 +1088,8 @@ function BookingCard({
 
       {/* 3. The money, as one panel whose colour says whether anything is owed. */}
       <div className="mt-4 flex gap-2">
-        <div className={cn("flex min-w-0 flex-1 items-center gap-3 rounded-xl border px-3 py-3", panelStyle.box)}>
+        <div className={cn("min-w-0 flex-1 rounded-xl border px-3 py-3", panelStyle.box)}>
+        <div className="flex min-w-0 items-center gap-3">
           <span
             aria-hidden="true"
             className={cn(
@@ -1051,7 +1108,9 @@ function BookingCard({
             {/* The UTR, spelled out: it is the first thing the owner looks for when
                 matching a booking to a line in the bank statement. */}
             <p className="mt-0.5 break-words text-xs text-ink-600">
-              {latestUtr ? (
+              {panel.sub ? (
+                panel.sub
+              ) : latestUtr ? (
                 <>
                   UTR: <span className="select-all font-mono font-semibold tracking-wide text-ink-800">{latestUtr}</span>
                   {gateway ? " · Razorpay" : ""}
@@ -1071,6 +1130,13 @@ function BookingCard({
               {panel.second ?? panel.caption}
             </p>
           </div>
+        </div>
+        {panel.collect ? (
+          <p className="mt-2.5 flex items-center gap-2 border-t border-amber-200 pt-2.5 text-sm font-semibold text-amber-900">
+            <HandCoins className="h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+            {formatCurrency(panel.collect)} to be collected from customer
+          </p>
+        ) : null}
         </div>
 
         {thumbnail ? (
@@ -1136,14 +1202,14 @@ function BookingCard({
             <BadgeCheck className="h-4 w-4" aria-hidden="true" />
             {/* A confirmed phone booking is not "under review" — the owner is
                 writing down cash they have already taken. */}
-            {isPending ? "Review payment" : `Record ${formatCurrency(booking.amountRemaining)}`}
+            {isPending ? "Review payment" : `Collect ${formatCurrency(booking.amountRemaining)}`}
           </Button>
         ) : null}
 
         {collectsBalance ? (
           <Button size="sm" className={ACTION} onClick={() => onAction("SETTLE_BALANCE")} disabled={busy}>
             <Banknote className="h-4 w-4" aria-hidden="true" />
-            Record {formatCurrency(booking.amountRemaining)}
+            Collect {formatCurrency(booking.amountRemaining)}
           </Button>
         ) : null}
 
@@ -1189,7 +1255,7 @@ function BookingCard({
             href={`/api/admin/bookings/${booking.id}/screenshot`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex min-w-[9.5rem] flex-1 sm:min-w-0 sm:flex-none"
+            className="flex flex-[1_0_auto] sm:flex-none"
           >
             <Button variant="secondary" size="sm" className="h-11 w-full rounded-xl sm:h-10 sm:px-5">
               <ImageIcon className="h-4 w-4" aria-hidden="true" />

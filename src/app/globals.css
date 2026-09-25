@@ -105,6 +105,25 @@
   }
 }
 
+/*
+ * The admin's phone tab bar steps aside while something is being typed.
+ *
+ * A phone keyboard carries a bottom-fixed bar up with it, so the tabs ended up
+ * floating over the middle of the page, covering the results of the very search
+ * being typed. Only fields that raise a keyboard count: a date, a checkbox or a
+ * dropdown opens the phone's own picker and should leave the tabs alone.
+ */
+@media (max-width: 1023px) {
+  body:has(
+      input:not([type="checkbox"], [type="radio"], [type="date"], [type="time"], [type="range"], [type="file"],
+          [type="button"], [type="submit"], [type="color"]):focus,
+      textarea:focus
+    )
+    .admin-tabbar {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

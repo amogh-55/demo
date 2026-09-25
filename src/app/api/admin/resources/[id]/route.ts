@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { ObjectId } from "mongodb";
 import { fail, ok, readJson } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
@@ -36,6 +37,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     // dropped now the write has landed — the owner sees their own edit at
     // once rather than whenever the short TTL happens to lapse.
     forgetResourceContext();
+    revalidatePath("/"); // the home page advertises this
     return ok({ resource: { id: updated._id.toHexString(), name: updated.name, active: updated.active } });
   } catch (err) {
     return fail(err, { route: "PATCH /api/admin/resources/[id]" });

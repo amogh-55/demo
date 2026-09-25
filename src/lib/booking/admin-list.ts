@@ -6,13 +6,26 @@ import { BOOKING_TABS, type BookingDoc, type BookingStatus, type BookingTab, typ
 
 export const BOOKINGS_PAGE_SIZE = 20;
 
+/**
+ * A payment attempt nobody has ruled on yet, on a booking that is still alive.
+ *
+ * The status half matters: a booking rejected while its screenshot was unchecked
+ * — the slot blocked for rain, say — keeps that attempt PENDING forever, and
+ * without it the dead booking sat in the queue and rang the bell. It belongs to
+ * the Rejected tab only. Shared by the tab, the bell and the dashboard card so
+ * the three numbers cannot disagree.
+ */
+export const TO_VERIFY: Filter<BookingDoc> = {
+  "payments.status": "PENDING",
+  status: { $in: ["PENDING", "CONFIRMED"] },
+};
+
 function tabFilter(tab: BookingTab): Filter<BookingDoc> {
   switch (tab) {
     case "pending":
       return { status: "PENDING" };
-    /** A payment attempt nobody has ruled on yet — the queue, in other words. */
     case "verify":
-      return { "payments.status": "PENDING" };
+      return TO_VERIFY;
     case "confirmed":
       return { status: "CONFIRMED" };
     // Grouped: from the owner's side a rejected, cancelled and expired booking are

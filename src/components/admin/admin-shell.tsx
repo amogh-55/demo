@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Bell, CalendarRange, ClipboardList, LayoutDashboard, LogOut, MapPin, Settings } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Bell, CalendarRange, ClipboardList, LayoutDashboard, LogOut, PhoneCall, Settings } from "lucide-react";
 import { api } from "@/lib/client";
 import { Button, Spinner, cn } from "@/components/ui/primitives";
 
@@ -13,24 +13,21 @@ interface AdminSessionView {
   displayName: string;
 }
 
-/** `short` exists because a five-column tab bar on a 360px phone cannot fit "Availability". */
+/**
+ * `short` exists because a five-column tab bar on a 360px phone cannot fit "Availability".
+ *
+ * One order everywhere, and it puts Bookings — the tab opened all day — in the
+ * middle of the phone bar, the easiest target one-handed. Grounds and prices
+ * live under Settings: they are set up once and rarely touched, which is no
+ * claim on a tab of their own.
+ */
 const NAV = [
   { href: "/admin", label: "Dashboard", short: "Home", icon: LayoutDashboard },
+  { href: "/admin/phone-booking", label: "Phone booking", short: "Phone", icon: PhoneCall },
   { href: "/admin/bookings", label: "Bookings", short: "Bookings", icon: ClipboardList },
   { href: "/admin/availability", label: "Availability", short: "Slots", icon: CalendarRange },
-  { href: "/admin/locations", label: "Locations", short: "Grounds", icon: MapPin },
   { href: "/admin/settings", label: "Settings", short: "Settings", icon: Settings },
 ];
-
-/**
- * The same five tabs, with Bookings moved to the middle.
- *
- * Only on the phone bar, and only because of the thumb: the centre of a
- * five-column bar is the easiest target one-handed, and Bookings is the tab the
- * owner opens all day. A sidebar has no middle worth competing for, so it keeps
- * the reading order above.
- */
-const MOBILE_NAV = [NAV[0]!, NAV[2]!, NAV[1]!, NAV[3]!, NAV[4]!];
 
 /** A turf seen from above: the brand mark on the sidebar and the phone header. */
 function PitchMark({ className }: { className?: string }) {
@@ -106,7 +103,33 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
    * says where you are, which is the one thing it cannot be wrong about.
    */
   const [pendingHref, setPendingHref] = React.useState<string | null>(null);
-  React.useEffect(() => setPendingHref(null), [pathname]);
+  // The query counts too: the bell and the dashboard cards change only the tab.
+  const here = `${pathname}?${useSearchParams().toString()}`;
+  React.useEffect(() => setPendingHref(null), [here]);
+
+  /*
+   * Any link inside the admin, not only the tabs — the bell, a dashboard card,
+   * "Open in Bookings" — starts the same busy state. Listened for in the capture
+   * phase because Next's <Link> cancels the click's default before it bubbles.
+   *
+   * There is no loading skeleton any more. React holds a skeleton on screen for
+   * at least 300ms once it is up, so it made every tab at least that slow even
+   * when the page was ready in a third of the time; the bar and the dim below
+   * answer the tap just as instantly without the wait.
+   */
+  React.useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as Element | null)?.closest?.("a");
+      if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
+      const next = new URL(link.href, window.location.href);
+      if (next.origin !== window.location.origin || !next.pathname.startsWith("/admin")) return;
+      if (next.pathname + next.search === window.location.pathname + window.location.search) return;
+      setPendingHref(next.pathname + next.search);
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
 
   // A navigation that never arrives — cancelled by the next tap, or a request that
   // failed — must not leave a tab spinning for the rest of the session.
@@ -115,8 +138,6 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
     const timer = window.setTimeout(() => setPendingHref(null), 8000);
     return () => window.clearTimeout(timer);
   }, [pendingHref]);
-
-  const startNavigation = (href: string) => setPendingHref(isActive(href) ? null : href);
 
   return (
     // Opaque, not `bg-ink-50/60`: the document body is dark for the customer site,
@@ -138,7 +159,6 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => startNavigation(item.href)}
                 aria-current={on ? "page" : undefined}
                 aria-busy={loading || undefined}
                 className={cn(
@@ -191,28 +211,44 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
           </div>
         </header>
 
+        {/* Up the moment a link is tapped, gone when the new page is in. */}
+        {pendingHref ? (
+          <div
+            role="progressbar"
+            aria-label="Loading page"
+            className="fixed inset-x-0 top-0 z-50 h-1 overflow-hidden bg-pitch-100"
+          >
+            <div className="h-full w-1/3 animate-admin-progress rounded-full bg-pitch-600" />
+          </div>
+        ) : null}
+
         {/* The extra bottom padding clears the tab bar *and* the iOS home indicator under it. */}
         <main
           id="main"
-          className="flex-1 px-4 py-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-6 lg:pb-8"
+          aria-busy={pendingHref ? true : undefined}
+          className={cn(
+            "flex-1 px-4 py-5 pb-[calc(6rem+env(safe-area-inset-bottom))] transition-opacity sm:px-6 lg:pb-8",
+            // Dimmed only if the wait outlasts a blink, so a fast page does not flicker.
+            pendingHref ? "opacity-50 delay-150 duration-200" : "opacity-100 delay-0 duration-0",
+          )}
         >
           {children}
         </main>
 
+        {/* `admin-tabbar` steps aside while the keyboard is up — see globals.css. */}
         <nav
-          className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-ink-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
+          className="admin-tabbar fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-ink-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
           // Named apart from the sidebar: two landmarks called the same thing give
           // a screen reader user two identical entries and no way to tell them apart.
           aria-label="Admin sections, bottom bar"
         >
-          {MOBILE_NAV.map((item) => {
+          {NAV.map((item) => {
             const on = isActive(item.href);
             const loading = pendingHref === item.href;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => startNavigation(item.href)}
                 aria-current={on ? "page" : undefined}
                 aria-busy={loading || undefined}
                 className={cn(

@@ -42,10 +42,12 @@ const config: Config = {
       keyframes: {
         "fade-up": { from: { opacity: "0", transform: "translateY(10px)" }, to: { opacity: "1", transform: "none" } },
         marquee: { from: { transform: "translateX(0)" }, to: { transform: "translateX(-50%)" } },
+        "admin-progress": { from: { transform: "translateX(-100%)" }, to: { transform: "translateX(300%)" } },
       },
       animation: {
         "fade-up": "fade-up .4s ease-out both",
         marquee: "marquee 28s linear infinite",
+        "admin-progress": "admin-progress 0.9s ease-in-out infinite",
       },
     },
   },
