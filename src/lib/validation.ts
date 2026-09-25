@@ -503,5 +503,7 @@ export const adminBookingsQuerySchema = z.object({
   status: z.enum(["PENDING", "CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"]).optional(),
   payment: z.enum(["PENDING", "PARTIAL", "VERIFIED", "REJECTED"]).optional(),
   search: z.string().trim().max(60).optional(),
+  /** A facility name — "Box Cricket", "Nets" — matched across every ground that has one. */
+  sport: z.string().trim().max(60).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
 });

@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { CalendarRange, ClipboardList, LayoutDashboard, LogOut, MapPin, Settings } from "lucide-react";
+import { Bell, CalendarRange, ClipboardList, LayoutDashboard, LogOut, MapPin, Settings } from "lucide-react";
 import { api } from "@/lib/client";
 import { Button, Spinner, cn } from "@/components/ui/primitives";
 
@@ -32,6 +32,49 @@ const NAV = [
  */
 const MOBILE_NAV = [NAV[0]!, NAV[2]!, NAV[1]!, NAV[3]!, NAV[4]!];
 
+/** A turf seen from above: the brand mark on the sidebar and the phone header. */
+function PitchMark({ className }: { className?: string }) {
+  return (
+    <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-pitch-600 text-white shadow-sm", className)}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden="true">
+        <rect x="2.5" y="5" width="19" height="14" rx="2" />
+        <path d="M12 5v14M2.5 9.5H5v5H2.5M21.5 9.5H19v5h2.5" />
+        <circle cx="12" cy="12" r="2.5" />
+      </svg>
+    </span>
+  );
+}
+
+/**
+ * Payments waiting for the owner to check — the To verify tab, counted across
+ * every ground so the number means the same on every page.
+ *
+ * Asked for again on every page change, when the app comes back to the front,
+ * and whenever the bookings screen says it just changed something.
+ */
+function useToVerify(pathname: string): number {
+  const [count, setCount] = React.useState(0);
+  React.useEffect(() => {
+    let live = true;
+    const refresh = () => {
+      api<{ counts?: { verify?: number } }>("/api/admin/bookings?page=1")
+        .then((r) => live && setCount(r.counts?.verify ?? 0))
+        .catch(() => {
+          // A bell that cannot update keeps its last number; it is a nudge, not a record.
+        });
+    };
+    refresh();
+    window.addEventListener("admin:bookings-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      live = false;
+      window.removeEventListener("admin:bookings-changed", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [pathname]);
+  return count;
+}
+
 /** Sidebar on desktop, bottom tab bar on phones — the owner reviews bookings on mobile. */
 export function AdminShell({ session, children }: { session: AdminSessionView; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -47,6 +90,8 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
       router.refresh();
     }
   }
+
+  const toVerify = useToVerify(pathname);
 
   const isActive = (href: string) => (href === "/admin" ? pathname === "/admin" : pathname.startsWith(href));
 
@@ -82,8 +127,8 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
           owner with no way back except scrolling all the way up again. */}
       <aside className="hidden w-60 shrink-0 border-r border-ink-200 bg-white lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col">
         <div className="flex h-16 items-center gap-2 border-b border-ink-100 px-5">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-pitch-600 text-sm text-white">🏏</span>
-          <span className="font-semibold text-ink-900">Turf Admin</span>
+          <PitchMark />
+          <span className="text-lg font-bold tracking-tight text-ink-900">Turf Admin</span>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="Admin sections">
           {NAV.map((item) => {
@@ -117,13 +162,28 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 bg-white px-4 sm:px-6">
+        <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-3 border-b border-ink-200 bg-white px-4 sm:px-6">
           {/* The sidebar already carries the name on a wide screen. */}
-          <span className="font-semibold text-ink-900 lg:hidden">Turf Admin</span>
-          <div className="ml-auto flex items-center gap-3">
+          <Link href="/admin" className="flex items-center gap-2.5 lg:hidden">
+            <PitchMark />
+            <span className="text-lg font-bold tracking-tight text-ink-900">Turf Admin</span>
+          </Link>
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <span className="hidden text-sm text-ink-500 sm:inline">
               Signed in as <span className="font-medium text-ink-700">{session.displayName}</span>
             </span>
+            <Link
+              href="/admin/bookings?tab=verify"
+              aria-label={toVerify > 0 ? `${toVerify} payment${toVerify === 1 ? "" : "s"} to verify` : "Payments to verify"}
+              className="relative grid h-11 w-11 place-items-center rounded-full text-ink-700 transition-colors hover:bg-ink-100"
+            >
+              <Bell className="h-5 w-5" aria-hidden="true" />
+              {toVerify > 0 ? (
+                <span className="absolute right-1 top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
+                  {toVerify > 9 ? "9+" : toVerify}
+                </span>
+              ) : null}
+            </Link>
             <Button variant="danger" size="sm" className="h-11 sm:h-9" onClick={signOut} disabled={signingOut}>
               <LogOut className="h-4 w-4" aria-hidden="true" />
               {signingOut ? "Signing out…" : "Sign out"}

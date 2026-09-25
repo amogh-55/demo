@@ -19,6 +19,7 @@ export default async function AdminBookingsPage({
     status?: string;
     payment?: string;
     search?: string;
+    sport?: string;
   }>;
 }) {
   const filters = await searchParams;
@@ -44,6 +45,10 @@ export default async function AdminBookingsPage({
   return (
     <div className="mx-auto max-w-5xl space-y-4">
       <BookingsManager
+        // A link that changes the filters — the header bell, a dashboard card —
+        // has to start the list over; without the key the open list keeps its
+        // own state and the tap appears to do nothing.
+        key={JSON.stringify(filters)}
         locations={locations.map((l) => ({ id: l._id.toHexString(), name: l.name }))}
         today={istDateString()}
         facilities={facilities

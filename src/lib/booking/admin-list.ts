@@ -32,6 +32,7 @@ export interface AdminBookingsQuery {
   status?: BookingStatus;
   payment?: PaymentStatus;
   search?: string;
+  sport?: string;
 }
 
 /**
@@ -52,6 +53,9 @@ export async function listBookings(query: AdminBookingsQuery) {
   const scope: Filter<BookingDoc> = {};
   if (query.locationId && ObjectId.isValid(query.locationId)) scope.locationId = new ObjectId(query.locationId);
   if (query.date && isValidBusinessDate(query.date)) scope.date = query.date;
+  // By name, not id: "Bowling Machine" is two facilities at two grounds, and the
+  // owner filtering for it means both.
+  if (query.sport) scope.facilityName = query.sport;
 
   if (query.search) {
     const term = query.search.trim();
