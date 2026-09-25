@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { fail, LAST_BOOKING_COOKIE, ok } from "@/lib/api";
 import { readSignedCookieValue } from "@/lib/auth";
-import { startOnlinePayment } from "@/lib/booking/online-payment";
+import { releaseUnpaidOnlineBooking, startOnlinePayment } from "@/lib/booking/online-payment";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -64,5 +64,39 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     return fail(err, { route: "POST /api/payments/razorpay/order" });
+  }
+}
+
+/**
+ * Give back the caller's own unpaid online booking: they pressed Change slot.
+ *
+ * Same cookie, same rule as above — a browser can only ever let go of the booking
+ * it made, and only while nothing has been paid on it. If Razorpay says the money
+ * did arrive, the booking is confirmed instead and the answer says so, so the page
+ * shows the customer their booking rather than sending them off to pay again.
+ */
+export async function DELETE(request: Request) {
+  try {
+    await rateLimit(`rzp-release:${clientIp(request.headers)}`, 20, 60);
+
+    const jar = await cookies();
+    const reference = readSignedCookieValue(jar.get(LAST_BOOKING_COOKIE)?.value);
+    // The page names the booking it is walking away from. With two tabs open the
+    // cookie can already point at the other tab's booking, and that one is left
+    // alone — this one goes back on sale with the sweep instead.
+    const claimed = new URL(request.url).searchParams.get("reference");
+    if (!reference || reference !== claimed) return ok({ released: false, alreadyPaid: false });
+
+    const db = await getDb();
+    const booking = await collections.bookings(db).findOne({ reference });
+    if (!booking) return ok({ released: false, alreadyPaid: false });
+
+    const after = await releaseUnpaidOnlineBooking(booking);
+    if (after.status === "CONFIRMED") {
+      return ok({ released: false, alreadyPaid: true, reference: after.reference });
+    }
+    return ok({ released: after.status !== "PENDING", alreadyPaid: false });
+  } catch (err) {
+    return fail(err, { route: "DELETE /api/payments/razorpay/order" });
   }
 }

@@ -656,11 +656,41 @@ export function BookingFlow({
   }
 
   async function releaseAndRestart() {
-    try {
-      await api("/api/holds", { method: "DELETE" });
-    } catch {
-      // Releasing is best-effort; the hold expires on its own regardless.
+    if (payingOnline) return;
+    if (onlineReference) {
+      /*
+       * Pressing Pay already turned the hold into a booking, so the slot is that
+       * booking's now — releasing the hold would free nothing, and it would sit
+       * "On hold" in front of the very customer who let it go. Stays put if the
+       * release fails: going back with the old booking still attached is what
+       * once charged a customer for the slot they had just walked away from.
+       */
+      try {
+        const result = await api<{ alreadyPaid: boolean }>(
+          `/api/payments/razorpay/order?reference=${encodeURIComponent(onlineReference)}`,
+          { method: "DELETE" },
+        );
+        if (result.alreadyPaid) {
+          router.push("/booking/success");
+          return;
+        }
+      } catch (err) {
+        setError(errorMessage(err));
+        return;
+      }
+      setOnlineReference(null);
+      setAwaitingConfirmation(false);
+    } else {
+      try {
+        await api("/api/holds", { method: "DELETE" });
+      } catch {
+        // Releasing is best-effort; the hold expires on its own regardless.
+      }
     }
+    setError(null);
+    // Left selected, the old slot turned the next tap into a range from it — a
+    // customer changing 7–8 AM to 10–11 PM was offered 7 AM to 11 PM, ₹14,700.
+    setSelection(null);
     setHold(null);
     setHoldExpired(false);
     setScreenshotKey(null);

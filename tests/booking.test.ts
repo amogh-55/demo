@@ -2990,6 +2990,105 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
   });
 
+  /**
+   * The owner's bug: a payment failed, the customer pressed Change slot, and the
+   * slot sat "On hold" for nobody until the sweep came round.
+   *
+   * Razorpay's answer about the order is stubbed, because that answer is the one
+   * thing deciding between releasing the slot and confirming the booking.
+   */
+  describe("customer changes slot after a failed payment", () => {
+    const realFetch = globalThis.fetch;
+    /** What Razorpay reports as paid against each order, by order id. */
+    let razorpayPayments: Record<string, Array<{ id: string; status: string; amount: number }>> = {};
+
+    beforeEach(() => {
+      razorpayPayments = {};
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const match = url.match(/api\.razorpay\.com\/v1\/orders\/([^/]+)\/payments/);
+        if (match) {
+          const orderId = decodeURIComponent(match[1]!);
+          const items = (razorpayPayments[orderId] ?? []).map((p) => ({
+            ...p,
+            order_id: orderId,
+            currency: "INR",
+            method: "upi",
+          }));
+          return new Response(JSON.stringify({ items }), { status: 200 });
+        }
+        return realFetch(input, init);
+      }) as typeof fetch;
+    });
+
+    after(() => {
+      globalThis.fetch = realFetch;
+    });
+
+    async function paying(startMin: number, on: string) {
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date: on, startMin, endMin: startMin + 60 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        paymentMethod: "RAZORPAY",
+      });
+      const orderId = `order_${booking.reference}`;
+      await collections.bookings(db).updateOne({ _id: booking._id }, { $push: { razorpayOrderIds: orderId } });
+      return { booking: (await collections.bookings(db).findOne({ _id: booking._id }))!, orderId };
+    }
+
+    it("puts the slot straight back on sale when nothing was paid", async () => {
+      const on = futureDate(27);
+      const { booking, orderId } = await paying(1020, on);
+      razorpayPayments[orderId] = [{ id: "pay_DECLINED", status: "failed", amount: booking.amount * 100 }];
+
+      const after = await online.releaseUnpaidOnlineBooking(booking);
+      assert.equal(after.status, "REJECTED");
+      assert.equal(after.rejectionReason, "Customer changed slot before paying");
+      const availability = await service.getAvailability(RESOURCE_ID, on);
+      assert.equal(availability.units.find((u) => u.startMin === 1020)!.status, "AVAILABLE");
+    });
+
+    /** The money went through and our server never heard. Releasing would lose a paid slot. */
+    it("confirms the booking instead when the payment did land", async () => {
+      const on = futureDate(27);
+      const { booking, orderId } = await paying(1140, on);
+      razorpayPayments[orderId] = [{ id: "pay_LANDED", status: "captured", amount: booking.amount * 100 }];
+
+      const after = await online.releaseUnpaidOnlineBooking(booking);
+      assert.equal(after.status, "CONFIRMED");
+      assert.equal(after.amountPaid, booking.amount);
+      const units = await collections.slotUnits(db).find({ bookingId: booking._id }).toArray();
+      assert.ok(units.length > 0 && units.every((u) => u.status === "BOOKED"));
+    });
+
+    it("never releases a screenshot booking, which is the owner's to review", async () => {
+      const on = futureDate(27);
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date: on, startMin: 1200, endMin: 1260 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+      });
+      assert.equal((await online.releaseUnpaidOnlineBooking(booking)).status, "PENDING");
+      assert.equal((await collections.bookings(db).findOne({ _id: booking._id }))!.status, "PENDING");
+    });
+
+    it("is harmless when pressed twice", async () => {
+      const on = futureDate(27);
+      const { booking } = await paying(1320, on);
+      const first = await online.releaseUnpaidOnlineBooking(booking);
+      const second = await online.releaseUnpaidOnlineBooking(first);
+      assert.equal(second.status, "REJECTED");
+      const rejections = second.timeline.filter((t) => t.event === "BOOKING_REJECTED");
+      assert.equal(rejections.length, 1);
+    });
+  });
+
   /* ── The owner's copy ──────────────────────────────────────────────── */
 
   describe("emailing the owner about a confirmed booking", () => {

@@ -335,6 +335,40 @@ export async function recordFailedOnlinePayment(input: {
   });
 }
 
+/**
+ * The customer walked away from an online booking they never paid for — pressed
+ * Change slot after a failed or cancelled checkout.
+ *
+ * Pressing Pay turned their hold into a booking, so the slot belongs to that
+ * booking now and releasing the hold frees nothing. Left alone it would sit
+ * "On hold" for nobody until the sweep, and the customer who just let it go
+ * would read it as somebody else's.
+ *
+ * Razorpay is asked first, exactly as the sweep does: a payment that did land
+ * confirms the booking rather than releasing it. Anything else — not online,
+ * already settled, money already on it — is handed back untouched.
+ */
+export async function releaseUnpaidOnlineBooking(booking: BookingDoc): Promise<BookingDoc> {
+  if (booking.paymentMethod !== "RAZORPAY" || booking.status !== "PENDING") return booking;
+
+  for (const orderId of booking.razorpayOrderIds ?? []) {
+    const settled = await recoverPaidOrder(orderId);
+    if (settled) return settled;
+  }
+  if ((booking.amountPaid ?? 0) > 0) return booking;
+
+  try {
+    return await rejectBooking(booking._id, "Customer changed slot before paying", { username: "customer" });
+  } catch (err) {
+    // The webhook confirmed it between our question and this write. What it is
+    // now is the answer; the customer is shown that, not a conflict.
+    const db = await getDb();
+    const current = await collections.bookings(db).findOne({ _id: booking._id });
+    if (current && current.status !== "PENDING") return current;
+    throw err;
+  }
+}
+
 /** Settle whatever was actually captured against an order we lost track of. */
 async function recoverPaidOrder(orderId: string): Promise<BookingDoc | null> {
   const payments = await fetchOrderPayments(orderId);
