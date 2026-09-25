@@ -500,7 +500,7 @@ export const adminBookingsQuerySchema = z.object({
   locationId: z.string().optional(),
   date: z.string().optional(),
   /** Which pile of bookings to show. See BOOKING_TABS — "verify" is the review queue. */
-  tab: z.enum(["all", "pending", "verify", "confirmed", "rejected"]).optional(),
+  tab: z.enum(["all", "pending", "verify", "confirmed", "completed", "rejected"]).optional(),
   status: z.enum(["PENDING", "CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"]).optional(),
   payment: z.enum(["PENDING", "PARTIAL", "VERIFIED", "REJECTED"]).optional(),
   search: z.string().trim().max(60).optional(),

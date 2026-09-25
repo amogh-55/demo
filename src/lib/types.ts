@@ -18,13 +18,14 @@ export type BookingStatus = "PENDING" | "CONFIRMED" | "REJECTED" | "CANCELLED" |
  * "verify" is the one that is not a status: it means "somebody sent money and is
  * waiting on me", which is the actual job of that screen.
  */
-export type BookingTab = "all" | "pending" | "verify" | "confirmed" | "rejected";
+export type BookingTab = "all" | "pending" | "verify" | "confirmed" | "completed" | "rejected";
 
 export const BOOKING_TABS: ReadonlyArray<{ id: BookingTab; label: string }> = [
   { id: "all", label: "All" },
   { id: "pending", label: "Pending" },
   { id: "verify", label: "To verify" },
   { id: "confirmed", label: "Confirmed" },
+  { id: "completed", label: "Completed" },
   { id: "rejected", label: "Rejected" },
 ];
 /**

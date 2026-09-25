@@ -8,6 +8,7 @@ import {
   Dumbbell,
   Lightbulb,
   MapPin,
+  Navigation,
   Phone,
   Play,
   QrCode,
@@ -126,8 +127,9 @@ export default async function HomePage() {
               {/* Down to the grounds, not straight to the booking form. Three
                   grounds sell different things, and a customer who lands on the
                   form first has to pick one from a dropdown having never seen
-                  what is at any of them. */}
-              <a href="#grounds">
+                  what is at any of them. Straight to the cards rather than the
+                  section heading, so their Book buttons are on screen. */}
+              <a href="#book">
                 <Button size="lg" className="w-full sm:w-auto">
                   <CalendarDays className="h-5 w-5" aria-hidden="true" />
                   Book Now
@@ -169,17 +171,18 @@ export default async function HomePage() {
           <p className="mt-3 max-w-xl text-ink-400">Every ground is floodlit, match-ready and open late.</p>
 
           {locations.length === 0 ? (
-            <p className="mt-10 rounded-xl border border-dashed border-white/15 px-6 py-12 text-center text-ink-400">
+            <p id="book" className="mt-10 scroll-mt-[72px] rounded-xl border border-dashed border-white/15 px-6 py-12 text-center text-ink-400">
               No grounds are open for booking right now. Please check back shortly.
             </p>
           ) : (
-            <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <ul id="book" className="mt-10 grid scroll-mt-[72px] gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {locations.map((location) => (
                 <li
                   key={location.id}
                   className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] transition-colors hover:border-lime-400/40"
                 >
-                  <div className="relative h-48 w-full overflow-hidden bg-ink-900">
+                  {/* A little shorter on a laptop, so Book now lands with every card's button on screen. */}
+                  <div className="relative h-48 w-full overflow-hidden bg-ink-900 lg:h-40">
                     <Image
                       src={locationCover(location.slug, location.image)}
                       alt={location.name}
@@ -196,6 +199,19 @@ export default async function HomePage() {
                       <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />
                       {location.address}
                     </p>
+                    <a
+                      className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-lime-400 hover:underline"
+                      // The owner's own Maps pin when they have given one, as in "Get directions" below.
+                      href={
+                        location.mapsUrl ||
+                        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${location.name} ${location.address}`)}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Navigation className="h-4 w-4" aria-hidden="true" />
+                      Open in Google Maps
+                    </a>
                     {location.description ? (
                       <p className="mt-3 break-words text-sm text-ink-400">{location.description}</p>
                     ) : null}

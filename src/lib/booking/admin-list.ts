@@ -1,7 +1,7 @@
 import "server-only";
 import { ObjectId, type Filter } from "mongodb";
 import { collections, getDb } from "@/lib/db";
-import { isValidBusinessDate } from "@/lib/time";
+import { istDateString, istMinutesOfDay, isValidBusinessDate } from "@/lib/time";
 import { BOOKING_TABS, type BookingDoc, type BookingStatus, type BookingTab, type PaymentStatus } from "@/lib/types";
 
 export const BOOKINGS_PAGE_SIZE = 20;
@@ -20,6 +20,39 @@ export const TO_VERIFY: Filter<BookingDoc> = {
   status: { $in: ["PENDING", "CONFIRMED"] },
 };
 
+/**
+ * A confirmed booking whose end time has passed is Completed — whether or not
+ * the customer turned up, and whatever is still owed. Worked out from the clock
+ * (IST) rather than stored, so it is right to the minute with no job to run,
+ * and the status every payment path checks stays CONFIRMED: the balance can
+ * still be collected after the game.
+ *
+ * In `$and` because the search box already owns the top-level `$or`.
+ */
+export function playedFilter(now = new Date()): Filter<BookingDoc> {
+  const today = istDateString(now);
+  return {
+    status: "CONFIRMED",
+    $and: [{ $or: [{ date: { $lt: today } }, { date: today, endMin: { $lte: istMinutesOfDay(now) } }] }],
+  };
+}
+
+/** Confirmed and still to be played, or being played now. */
+export function upcomingFilter(now = new Date()): Filter<BookingDoc> {
+  const today = istDateString(now);
+  return {
+    status: "CONFIRMED",
+    $and: [{ $or: [{ date: { $gt: today } }, { date: today, endMin: { $gt: istMinutesOfDay(now) } }] }],
+  };
+}
+
+/** True once a confirmed booking's end time has passed. The same rule as `playedFilter`. */
+export function hasPlayed(b: Pick<BookingDoc, "status" | "date" | "endMin">, now = new Date()): boolean {
+  if (b.status !== "CONFIRMED") return false;
+  const today = istDateString(now);
+  return b.date < today || (b.date === today && b.endMin <= istMinutesOfDay(now));
+}
+
 function tabFilter(tab: BookingTab): Filter<BookingDoc> {
   switch (tab) {
     case "pending":
@@ -27,7 +60,9 @@ function tabFilter(tab: BookingTab): Filter<BookingDoc> {
     case "verify":
       return TO_VERIFY;
     case "confirmed":
-      return { status: "CONFIRMED" };
+      return upcomingFilter();
+    case "completed":
+      return playedFilter();
     // Grouped: from the owner's side a rejected, cancelled and expired booking are
     // one thing — a slot that went back on sale.
     case "rejected":
@@ -173,6 +208,7 @@ function serialiseForList(b: BookingDoc) {
     // A short bowling session is confirmed without paying, so "nothing
     // received" on it is expected rather than a problem to chase.
     payAtVenue: Boolean(b.payAtVenue),
+    completed: hasPlayed(b),
     // Null unless the owner wrote this one in from a phone call, which is why
     // it has no screenshot and often no money yet.
     createdBy: b.createdBy ?? null,

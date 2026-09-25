@@ -53,6 +53,7 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
             bookingWindowDays={bookingWindowDays}
             locations={locations}
             otpEnabled={settings.otpEnabled}
+            emailRequired={settings.emailOnBooking}
             otpWidget={widgetConfig()}
             /* Both halves: the keys have to be deployed AND the owner has to have
                switched it on. Every request checks the same pair again, so a page

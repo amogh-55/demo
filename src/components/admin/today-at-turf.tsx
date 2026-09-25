@@ -150,7 +150,10 @@ export function TodayAtTurf({
                         .join(" · ")}
                     </span>
                   </span>
-                  <StatusBadge status={b.status} className="hidden shrink-0 sm:inline-flex" />
+                  <StatusBadge
+                    status={b.status === "CONFIRMED" && over ? "COMPLETED" : b.status}
+                    className="hidden shrink-0 sm:inline-flex"
+                  />
                   <ChevronRight className="h-5 w-5 shrink-0 text-ink-300" aria-hidden="true" />
                 </Link>
               </li>

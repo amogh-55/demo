@@ -96,7 +96,7 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
               before a time is. On any page without a #grounds section the anchor
               simply takes them home to it. */}
           <Link
-            href="/#grounds"
+            href="/#book"
             className={cn("transition-opacity duration-300", pastGrounds ? "opacity-100" : "pointer-events-none opacity-0")}
             aria-hidden={!pastGrounds}
             tabIndex={pastGrounds ? undefined : -1}

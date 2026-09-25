@@ -6,6 +6,7 @@ import {
   Banknote,
   CalendarDays,
   Check,
+  CheckCheck,
   ChevronDown,
   CircleCheck,
   CircleX,
@@ -49,6 +50,8 @@ interface AdminBooking {
   phoneVerified: boolean;
   /** Short bowling sessions: confirmed on the spot, cash due at the ground. */
   payAtVenue: boolean;
+  /** Confirmed and its end time has passed. Any balance can still be collected. */
+  completed: boolean;
   /** Set when the owner took this booking over the phone, so it has no payment behind it. */
   createdBy: string | null;
   /** RAZORPAY settles itself; UPI_MANUAL needs an admin to look at a screenshot. */
@@ -718,11 +721,11 @@ function paymentSummary(b: AdminBooking): { tone: "paid" | "advance" | "short" |
  * How the card looks as a whole. The edge colour, the avatar, the pill and the
  * payment panel all follow this one answer, so they can never disagree.
  */
-type Look = "confirmed" | "verify" | "partial" | "waiting" | "dead";
+type Look = "confirmed" | "completed" | "verify" | "partial" | "waiting" | "dead";
 
 function lookOf(b: AdminBooking, tone: ReturnType<typeof paymentSummary>["tone"]): Look {
   if (b.status === "REJECTED" || b.status === "CANCELLED" || b.status === "EXPIRED") return "dead";
-  if (b.status === "CONFIRMED") return "confirmed";
+  if (b.status === "CONFIRMED") return b.completed ? "completed" : "confirmed";
   // A payment nobody has ruled on yet: exactly what the To verify tab counts.
   if (b.payments.some((p) => p.status === "PENDING")) return "verify";
   if (tone === "short") return "partial";
@@ -731,6 +734,7 @@ function lookOf(b: AdminBooking, tone: ReturnType<typeof paymentSummary>["tone"]
 
 const LOOK_STYLE: Record<Look, { accent: string; avatar: string }> = {
   confirmed: { accent: "bg-green-500", avatar: "bg-green-50 text-green-700" },
+  completed: { accent: "bg-ink-400", avatar: "bg-ink-100 text-ink-700" },
   verify: { accent: "bg-blue-500", avatar: "bg-blue-50 text-blue-700" },
   partial: { accent: "bg-orange-500", avatar: "bg-orange-50 text-orange-700" },
   waiting: { accent: "bg-amber-400", avatar: "bg-amber-50 text-amber-800" },
@@ -839,6 +843,7 @@ function StatePill({ booking, look }: { booking: AdminBooking; look: Look }) {
   const attempt = [...booking.payments].reverse().find((p) => p.status === "PENDING");
   const pill: { icon: LucideIcon; label: string; sub?: string; tone: string } = {
     confirmed: { icon: CircleCheck, label: "Confirmed", tone: "bg-green-50 text-green-800 ring-green-600/20" },
+    completed: { icon: CheckCheck, label: "Completed", tone: "bg-ink-100 text-ink-700 ring-ink-500/20" },
     verify: {
       icon: Clock3,
       label: "Payment received",
@@ -1197,7 +1202,8 @@ function BookingCard({
           </Button>
         ) : null}
 
-        {booking.status === "CONFIRMED" ? (
+        {/* Not once the game is over: "your booking is confirmed" after it has been played. */}
+        {booking.status === "CONFIRMED" && !booking.completed ? (
           <Button
             size="sm"
             variant="secondary"

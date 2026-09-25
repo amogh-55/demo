@@ -13,7 +13,7 @@ import {
   IndianRupee,
   type LucideIcon,
 } from "lucide-react";
-import { TO_VERIFY } from "@/lib/booking/admin-list";
+import { TO_VERIFY, upcomingFilter } from "@/lib/booking/admin-list";
 import { collections, getDb } from "@/lib/db";
 import { formatMinutes, istDateString, istMinutesOfDay } from "@/lib/time";
 import { cn, formatCurrency } from "@/components/ui/primitives";
@@ -50,7 +50,7 @@ export default async function AdminDashboardPage({
   const scope = activeIds.length ? { locationId: { $in: activeIds.map((id) => new ObjectId(id)) } } : {};
   const live = { $in: ["PENDING", "CONFIRMED"] as Array<"PENDING" | "CONFIRMED"> };
 
-  const [byStatus, todayBookings, toVerify, blockedUnits, blockedDays, takings] = await Promise.all([
+  const [byStatus, todayBookings, toVerify, upcoming, blockedUnits, blockedDays, takings] = await Promise.all([
     collections
       .bookings(db)
       .aggregate<{ _id: string; count: number }>([{ $match: scope }, { $group: { _id: "$status", count: { $sum: 1 } } }])
@@ -65,6 +65,9 @@ export default async function AdminDashboardPage({
     // The same rule as the To verify tab this card opens, so the two numbers
     // can never disagree.
     collections.bookings(db).countDocuments({ ...scope, ...TO_VERIFY }),
+    // Still to be played, the same as the Confirmed filter this card opens:
+    // once a game's end time passes it moves to Completed.
+    collections.bookings(db).countDocuments({ ...scope, ...upcomingFilter() }),
     collections.slotUnits(db).countDocuments({ ...scope, status: "BLOCKED", date: { $gte: today } }),
     collections.dayBlocks(db).countDocuments({ ...scope, date: { $gte: today } }),
     // Money actually collected for today, which is the number an owner opens the
@@ -163,7 +166,7 @@ export default async function AdminDashboardPage({
           </section>
 
           <ul className="grid grid-cols-3 gap-3">
-            <MiniStat href="/admin/bookings?tab=confirmed" icon={CircleCheck} tone="green" value={count("CONFIRMED")} label="Confirmed" />
+            <MiniStat href="/admin/bookings?tab=confirmed" icon={CircleCheck} tone="green" value={upcoming} label="Confirmed" />
             <MiniStat
               href="/admin/bookings?tab=rejected"
               icon={CircleX}

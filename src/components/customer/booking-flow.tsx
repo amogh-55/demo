@@ -159,6 +159,7 @@ export function BookingFlow({
   today,
   bookingWindowDays,
   otpEnabled,
+  emailRequired,
   otpWidget,
   onlinePaymentReady,
   manualPaymentAllowed,
@@ -179,6 +180,8 @@ export function BookingFlow({
    * the server checks it again on submission, so a stale page cannot skip it.
    */
   otpEnabled: boolean;
+  /** On while the owner has booking emails switched on in Settings. The server checks it too. */
+  emailRequired: boolean;
   /**
    * MSG91's widget credentials, or null when they are not configured. Read on the
    * server so they are not in a NEXT_PUBLIC_ variable; the AuthKey that makes a
@@ -204,6 +207,13 @@ export function BookingFlow({
 
   const initialLocation = locations.find((l) => l.slug === initialLocationSlug) ?? locations[0];
   const [locationId, setLocationId] = React.useState<string>(() => initialLocation?.id ?? "");
+  /**
+   * Someone who tapped "Book this ground" has already chosen, so the ground step
+   * is left out; Back takes them to pick another.
+   */
+  const groundChosen = locations.some((l) => l.slug === initialLocationSlug);
+  /** Step numbers shift up by one when the ground step is not shown. */
+  const n = groundChosen ? 0 : 1;
   const [facilityId, setFacilityId] = React.useState<string>(() => initialLocation?.facilities[0]?.id ?? "");
   const [resourceId, setResourceId] = React.useState<string>(
     () => initialLocation?.facilities[0]?.resources[0]?.id ?? "",
@@ -922,14 +932,21 @@ export function BookingFlow({
       : null;
 
   /**
-   * Blank is fine — it means "no email". Anything else has to look like an
-   * address, because a typo here is a confirmation that silently goes nowhere.
-   * The server checks the same thing; this only says so before the form is sent.
+   * Blank means "no email" — unless the owner has booking emails on, when it is
+   * required. Anything typed has to look like an address, because a typo here is
+   * a confirmation that silently goes nowhere. The server checks the same thing;
+   * this only says so before the form is sent.
    */
   const emailProblem =
-    email.trim().length > 0 && !/^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test(email.trim())
-      ? "Enter a valid email address, or leave it blank."
-      : null;
+    email.trim().length === 0
+      ? emailRequired
+        ? "Email is required for you to get the confirmation."
+        : null
+      : !/^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test(email.trim())
+        ? emailRequired
+          ? "Enter a valid email address."
+          : "Enter a valid email address, or leave it blank."
+        : null;
 
   const detailsValid = !nameProblem && !phoneProblem && !emailProblem && phoneVerified;
 
@@ -996,63 +1013,65 @@ export function BookingFlow({
 
       {step === "slots" ? (
         <>
-          {/* Location */}
-          <section aria-labelledby="location-heading" className="card">
-            <h2 id="location-heading" className="text-lg font-semibold text-white">
-              1. Choose a ground
-            </h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {locations.map((l) => {
-                const active = l.id === locationId;
-                return (
-                  <button
-                    key={l.id}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setLocationId(l.id)}
-                    className={cn(
-                      "flex gap-3 rounded-lg border p-3 text-left transition-colors",
-                      active ? "border-lime-400 bg-lime-400/10 ring-1 ring-lime-400" : "border-white/10 hover:bg-white/5",
-                    )}
-                  >
-                    <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-md bg-white/10">
-                      <Image src={locationCover(l.slug, l.image)} alt="" fill sizes="56px" className="object-cover" />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-1.5 break-words font-semibold text-white">
-                        {l.name}
-                        {active ? <Check className="h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" /> : null}
+          {/* Location — left out when the customer came from a ground's own card. */}
+          {groundChosen ? null : (
+            <section aria-labelledby="location-heading" className="card">
+              <h2 id="location-heading" className="text-lg font-semibold text-white">
+                1. Choose a ground
+              </h2>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {locations.map((l) => {
+                  const active = l.id === locationId;
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setLocationId(l.id)}
+                      className={cn(
+                        "flex gap-3 rounded-lg border p-3 text-left transition-colors",
+                        active ? "border-lime-400 bg-lime-400/10 ring-1 ring-lime-400" : "border-white/10 hover:bg-white/5",
+                      )}
+                    >
+                      <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-md bg-white/10">
+                        <Image src={locationCover(l.slug, l.image)} alt="" fill sizes="56px" className="object-cover" />
                       </span>
-                      <span className="mt-0.5 flex items-start gap-1 break-words text-xs text-ink-400">
-                        <MapPin className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-                        {l.address}
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-1.5 break-words font-semibold text-white">
+                          {l.name}
+                          {active ? <Check className="h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" /> : null}
+                        </span>
+                        <span className="mt-0.5 flex items-start gap-1 break-words text-xs text-ink-400">
+                          <MapPin className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                          {l.address}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                    </button>
+                  );
+                })}
+              </div>
 
-            {location?.mapsUrl || location?.address ? (
-              <a
-                href={
-                  location.mapsUrl ||
-                  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${location.name} ${location.address}`)}`
-                }
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-3 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-medium text-lime-400 hover:underline"
-              >
-                <Navigation className="h-4 w-4" aria-hidden="true" />
-                Open {location.name} in Google Maps
-              </a>
-            ) : null}
-          </section>
+              {location?.mapsUrl || location?.address ? (
+                <a
+                  href={
+                    location.mapsUrl ||
+                    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${location.name} ${location.address}`)}`
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-medium text-lime-400 hover:underline"
+                >
+                  <Navigation className="h-4 w-4" aria-hidden="true" />
+                  Open {location.name} in Google Maps
+                </a>
+              ) : null}
+            </section>
+          )}
 
           {/* Facility — what this ground sells. Grounds differ, so this is never skipped. */}
           <section aria-labelledby="facility-heading" className="card">
             <h2 id="facility-heading" className="text-lg font-semibold text-white">
-              2. What would you like to book?
+              {n + 1}. What would you like to book?
             </h2>
             {!location || location.facilities.length === 0 ? (
               <EmptyState title="Nothing bookable here yet." hint="Please choose another ground." />
@@ -1144,7 +1163,7 @@ export function BookingFlow({
           {/* Date */}
           <section aria-labelledby="date-heading" className="card">
             <h2 id="date-heading" className="text-lg font-semibold text-white">
-              3. Pick a date
+              {n + 2}. Pick a date
             </h2>
             <div className="mt-4 max-w-xs">
               <label className="field-label" htmlFor="booking-date">
@@ -1181,7 +1200,7 @@ export function BookingFlow({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
                 <h2 id="slots-heading" className="flex flex-wrap items-center gap-2 text-lg font-semibold text-white">
-                  4. {isOvers ? "Choose your session" : "Choose your time"}
+                  {n + 3}. {isOvers ? "Choose your session" : "Choose your time"}
                   {/* Says why the evening costs more than it did on Tuesday, before
                       the customer gets to the total and wonders. */}
                   {availability?.weekendRate ? (
@@ -1624,17 +1643,12 @@ export function BookingFlow({
                   />
                   {phoneProblem && touched.phone ? (
                     <FieldError id="customer-phone-error">{phoneProblem}</FieldError>
-                  ) : (
-                    <p className="mt-1.5 text-xs text-ink-400">We will confirm your booking on WhatsApp.</p>
-                  )}
+                  ) : null}
                 </div>
-                {/* Optional on purpose. Everything that has to happen — the slot,
-                    the confirmation, the receipt — happens without it, and a
-                    required email field on a phone costs more bookings than the
-                    emails are worth. */}
+                {/* Required only while the owner has booking emails on (Settings). */}
                 <div className="sm:col-span-2">
                   <label className="field-label" htmlFor="customer-email">
-                    Email <span className="font-normal text-ink-400">(optional)</span>
+                    Email {emailRequired ? null : <span className="font-normal text-ink-400">(optional)</span>}
                   </label>
                   <input
                     id="customer-email"
@@ -1646,16 +1660,13 @@ export function BookingFlow({
                     onChange={(e) => setEmail(e.target.value)}
                     onBlur={leave("email")}
                     placeholder="you@example.com"
+                    required={emailRequired}
                     aria-invalid={emailProblem && touched.email ? true : undefined}
                     aria-describedby={emailProblem && touched.email ? "customer-email-error" : undefined}
                   />
                   {emailProblem && touched.email ? (
                     <FieldError id="customer-email-error">{emailProblem}</FieldError>
-                  ) : (
-                    <p className="mt-1.5 text-xs text-ink-400">
-                      We will email your booking confirmation here. Leave it blank if you would rather not.
-                    </p>
-                  )}
+                  ) : null}
                 </div>
               </div>
 

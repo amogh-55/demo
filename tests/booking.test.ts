@@ -2292,6 +2292,68 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
   });
 
+  /* ── Completed: a confirmed booking whose end time has passed ─────────── */
+
+  describe("completed bookings", () => {
+    /** An instant at `min` minutes past midnight IST on `date`. */
+    const at = (date: string, min: number) => new Date(Date.parse(`${date}T00:00:00+05:30`) + min * 60_000);
+
+    it("completes at the end time, keeps the balance collectable, and leaves the status alone", async () => {
+      const { hasPlayed, playedFilter, upcomingFilter } = await import("../src/lib/booking/admin-list");
+      const date = futureDate(28);
+      // 5–6 PM, ₹200 taken of the price: a part-paid confirmed booking.
+      const booking = await service.createManualBooking({
+        resourceId: RESOURCE_ID,
+        date,
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "Phone Caller",
+        customerPhone: "9876543210",
+        amountPaid: 200,
+        admin: ADMIN,
+      });
+      assert.equal(booking.status, "CONFIRMED");
+      assert.equal(booking.paymentVerificationStatus, "PARTIAL");
+      const where = async (filter: object) => collections.bookings(db).countDocuments({ _id: booking._id, ...filter });
+
+      // 5:59 it is still to be played; from 6:00 it is Completed.
+      assert.equal(hasPlayed(booking, at(date, 1079)), false);
+      assert.equal(await where(upcomingFilter(at(date, 1079))), 1);
+      assert.equal(await where(playedFilter(at(date, 1079))), 0);
+      assert.equal(hasPlayed(booking, at(date, 1081)), true);
+      assert.equal(await where(playedFilter(at(date, 1081))), 1);
+      assert.equal(await where(upcomingFilter(at(date, 1081))), 0);
+      // And stays Completed the next day.
+      assert.equal(await where(playedFilter(at(futureDate(29), 60))), 1);
+
+      // Completing it touched nothing: the payment is still part paid.
+      const stored = await collections.bookings(db).findOne({ _id: booking._id });
+      assert.equal(stored!.status, "CONFIRMED");
+      assert.equal(stored!.paymentVerificationStatus, "PARTIAL");
+      assert.equal(stored!.amountPaid, 200);
+
+      // The balance handed over after the game is still taken, and only the money moves.
+      const paid = await service.recordManualPayment({
+        bookingId: booking._id,
+        amount: booking.amount - 200,
+        note: "Balance collected at the ground",
+        admin: ADMIN,
+      });
+      assert.equal(paid.amountPaid, booking.amount);
+      assert.equal(paid.paymentVerificationStatus, "VERIFIED");
+      assert.equal(paid.status, "CONFIRMED");
+      assert.equal(hasPlayed(paid, at(date, 1081)), true, "still Completed once paid in full");
+    });
+
+    it("never completes a booking that was not confirmed", async () => {
+      const { hasPlayed } = await import("../src/lib/booking/admin-list");
+      const later = at(futureDate(40), 0);
+      for (const status of ["PENDING", "REJECTED", "CANCELLED", "EXPIRED"] as const) {
+        assert.equal(hasPlayed({ status, date: futureDate(1), endMin: 480 }, later), false, status);
+      }
+    });
+  });
+
   describe("bookings taken over the telephone", () => {
     it("confirms the slot immediately and records who took it", async () => {
       const date = futureDate(25);
