@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { TO_VERIFY, upcomingFilter } from "@/lib/booking/admin-list";
 import { collections, getDb } from "@/lib/db";
-import { formatMinutes, istDateString, istMinutesOfDay } from "@/lib/time";
+import { formatCompactRange, istDateString, istMinutesOfDay } from "@/lib/time";
 import { cn, formatCurrency } from "@/components/ui/primitives";
 import { LocationFilter } from "@/components/admin/location-filter";
 import { TodayAtTurf } from "@/components/admin/today-at-turf";
@@ -133,7 +133,7 @@ export default async function AdminDashboardPage({
                 <Clock3 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="truncate">
                   {next
-                    ? `${onNow ? "On now" : "Next"}: ${formatMinutes(next.startMin)} · ${next.customerName}`
+                    ? `${onNow ? "On now" : "Next"}: ${formatCompactRange(next.startMin, next.endMin)} · ${next.customerName}`
                     : "No more games today"}
                 </span>
               </span>

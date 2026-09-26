@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Check, ChevronDown, CircleCheck, IndianRupee, MapPin, User } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
 import { hoursTouched } from "@/lib/booking/schedule";
-import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatRange } from "@/lib/time";
 import { Alert, Button, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
 export interface ManualBookingFacility {
@@ -290,7 +290,7 @@ export function PhoneBookingForm({
   }
 
   /** One quarter-hour or one hour, as a button. */
-  const SlotButton = ({ unit, compact }: { unit: DayUnit; compact?: boolean }) => {
+  const SlotButton = ({ unit }: { unit: DayUnit }) => {
     const free = unit.status === "AVAILABLE";
     const fits = !isOvers || Boolean(oversRunFrom(unit.startMin));
     const selected = selectedUnits.some((u) => u.startMin === unit.startMin);
@@ -309,7 +309,7 @@ export function PhoneBookingForm({
               : "cursor-not-allowed border-ink-100 bg-ink-50 text-ink-400 line-through",
         )}
       >
-        <span>{compact ? formatCompactRange(unit.startMin, unit.endMin) : formatMinutes(unit.startMin)}</span>
+        <span>{formatCompactRange(unit.startMin, unit.endMin)}</span>
         {!isOvers && free && unit.price > 0 ? (
           <span className={cn("text-[10px] font-medium", selected ? "text-white/80" : "text-ink-500")}>
             {formatCurrency(unit.price)}
@@ -466,7 +466,7 @@ export function PhoneBookingForm({
                     {openNow ? (
                       <div className="grid grid-cols-2 gap-1.5 border-t border-ink-100 p-2 sm:grid-cols-4">
                         {own.map((unit) => (
-                          <SlotButton key={unit.startMin} unit={unit} compact />
+                          <SlotButton key={unit.startMin} unit={unit} />
                         ))}
                       </div>
                     ) : null}

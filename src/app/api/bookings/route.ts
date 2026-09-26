@@ -56,11 +56,6 @@ export async function POST(request: Request) {
      * outcome than one still showing an option they would rather retire.
      */
     const manualAllowed = !gatewayReady || settings.upiScreenshotEnabled;
-    // While the owner has booking emails on, the customer's email is required
-    // too — the form says so, and a client leaving it out does not skip it.
-    if (settings.emailOnBooking && !input.customerEmail) {
-      throw appError("VALIDATION", "Email is required for you to get the confirmation.");
-    }
     if (input.paymentMethod === "RAZORPAY" && !gatewayReady) {
       throw appError(
         "CONFLICT",
@@ -76,7 +71,6 @@ export async function POST(request: Request) {
       utr: input.utr,
       payAdvance: input.payAdvance,
       paymentMethod: input.paymentMethod === "RAZORPAY" ? "RAZORPAY" : "UPI_MANUAL",
-      customerEmail: input.customerEmail,
       allowManualPayment: manualAllowed,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,

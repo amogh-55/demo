@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowRight, CalendarDays, ChevronRight } from "lucide-react";
 import { sportEmoji } from "@/lib/sport";
-import { formatMinutes, minutesToDuration } from "@/lib/time";
+import { formatCompactRange, minutesToDuration } from "@/lib/time";
 import { StatusBadge, cn } from "@/components/ui/primitives";
 
 export interface TodayBooking {
@@ -125,11 +125,11 @@ export function TodayAtTurf({
                 >
                   <span
                     className={cn(
-                      "w-20 shrink-0 rounded-xl px-1 py-2 text-center sm:w-24",
+                      "w-24 shrink-0 rounded-xl px-1 py-2 text-center sm:w-28",
                       playing ? "bg-pitch-600 text-white" : "bg-ink-100 text-ink-800",
                     )}
                   >
-                    <span className="block text-base font-bold tabular-nums">{formatMinutes(b.startMin)}</span>
+                    <span className="block text-sm font-bold leading-tight tabular-nums">{formatCompactRange(b.startMin, b.endMin)}</span>
                     <span className={cn("block text-[11px] font-medium", playing ? "text-pitch-100" : "text-ink-500")}>
                       {playing ? "playing now" : minutesToDuration(b.endMin - b.startMin)}
                     </span>

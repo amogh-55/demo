@@ -231,9 +231,6 @@ export function BookingsManager({
     setPage(1);
   }, [locationId, date, tab, search, sport]);
 
-  /** Tells the header bell that the queue it counts may have moved. */
-  const announceChange = () => window.dispatchEvent(new Event("admin:bookings-changed"));
-
   async function runAction(action: PendingAction, reason: string) {
     setBusyId(action.booking.id);
     setActionError(null);
@@ -251,7 +248,6 @@ export function BookingsManager({
         setPending(null);
         setNotice(`Booking ${action.booking.reference} is now paid in full.`);
         await reload();
-        announceChange();
         return;
       }
 
@@ -264,7 +260,6 @@ export function BookingsManager({
           : `Booking ${action.booking.reference} rejected and its slots released.`,
       );
       await reload();
-      announceChange();
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -320,7 +315,6 @@ export function BookingsManager({
       );
       setReviewing(null);
       await reload();
-      announceChange();
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {

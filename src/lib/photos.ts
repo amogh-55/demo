@@ -87,10 +87,16 @@ export function locationPhotos(slug: string): GalleryPhoto[] {
  * The one photo that represents a ground — its card on the home page, its
  * thumbnail in the booking form.
  *
- * The owner's own "Image path" in the admin panel wins where it is set. Where
- * it is not, the gallery's first photo stands in, so a new ground shows a real
- * picture rather than a grey box from the moment it is created.
+ * Ground photos are set here in code, not in the admin panel. An image saved on
+ * a ground before that still wins; otherwise the gallery's first photo stands in,
+ * so a new ground shows a real picture rather than a grey box.
  */
 export function locationCover(slug: string, ownerImage?: string): string {
   return ownerImage?.trim() || locationPhotos(slug)[0]?.src || FALLBACK_PHOTO;
 }
+
+/**
+ * The UPI QR customers scan on the payment step. Put the image in public/images
+ * and set its path here, e.g. "/images/upi-qr.png". Blank shows the UPI ID only.
+ */
+export const UPI_QR_IMAGE = "";

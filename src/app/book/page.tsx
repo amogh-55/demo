@@ -5,6 +5,7 @@ import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
 import { getPublicCatalog, widestBookingWindow } from "@/lib/catalog";
 import { istDateString } from "@/lib/time";
 import { getSettings } from "@/lib/settings";
+import { UPI_QR_IMAGE } from "@/lib/photos";
 import { widgetConfig } from "@/lib/msg91-widget";
 import { razorpayConfigured } from "@/lib/razorpay";
 import { BookingFlow } from "@/components/customer/booking-flow";
@@ -53,7 +54,6 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
             bookingWindowDays={bookingWindowDays}
             locations={locations}
             otpEnabled={settings.otpEnabled}
-            emailRequired={settings.emailOnBooking}
             otpWidget={widgetConfig()}
             /* Both halves: the keys have to be deployed AND the owner has to have
                switched it on. Every request checks the same pair again, so a page
@@ -68,7 +68,7 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
               businessName: settings.businessName,
               upiId: settings.upiId,
               upiPayeeName: settings.upiPayeeName,
-              upiQrImageUrl: settings.upiQrImageUrl,
+              upiQrImageUrl: UPI_QR_IMAGE,
               supportPhone: settings.supportPhone,
             }}
           />

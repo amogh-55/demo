@@ -43,7 +43,7 @@ export default async function AdminBookingsPage({
   return (
     <div className="mx-auto max-w-5xl space-y-4">
       <BookingsManager
-        // A link that changes the filters — the header bell, a dashboard card —
+        // A link that changes the filters — a dashboard card —
         // has to start the list over; without the key the open list keeps its
         // own state and the tap appears to do nothing.
         key={JSON.stringify(filters)}

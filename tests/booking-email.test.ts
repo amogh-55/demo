@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { customerBookingEmail, escapeHtml, ownerBookingEmail, type BookingEmailFacts } from "../src/lib/email";
+import { escapeHtml, ownerBookingEmail, type BookingEmailFacts } from "../src/lib/email";
 
 const facts = (over: Partial<BookingEmailFacts> = {}): BookingEmailFacts => ({
   businessName: "Spirit Cricket Zone",
@@ -58,20 +58,6 @@ describe("the confirmation email", () => {
     assert.ok(mail.text.includes("Paid: ₹350"), mail.text);
     assert.ok(mail.text.includes("Balance: ₹350"), mail.text);
     assert.match(mail.text, /payable at the ground/);
-  });
-
-  /** An advance customer must be told what to bring; a full payer must not be. */
-  it("tells a customer who owes a balance what to bring, and one who does not that they are done", () => {
-    const part = customerBookingEmail(facts({ amountPaid: 350, amountRemaining: 350 }));
-    assert.match(part.text, /bring ₹350/);
-
-    const full = customerBookingEmail(facts());
-    assert.match(full.text, /paid in full/);
-    assert.ok(!/bring/i.test(full.text), full.text);
-  });
-
-  it("names the booking in the subject of the customer's copy", () => {
-    assert.match(customerBookingEmail(facts()).subject, /TURF-AB12CD/);
   });
 
   /**

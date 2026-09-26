@@ -3,7 +3,7 @@
 import * as React from "react";
 import { api, errorMessage } from "@/lib/client";
 import { ChevronDown } from "lucide-react";
-import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatRange } from "@/lib/time";
 import { Alert, Button, Spinner, StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
@@ -110,7 +110,7 @@ function SlotTile({
       {/* Two columns on a 320px phone leave no room for time and badge side by
           side, so the badge is allowed to drop onto its own line. */}
       <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <span className="text-sm font-semibold text-ink-900">{formatMinutes(unit.startMin)}</span>
+        <span className="text-sm font-semibold text-ink-900">{formatCompactRange(unit.startMin, unit.endMin)}</span>
         <StatusBadge status={unit.status} />
       </span>
       <span className="mt-1 block text-xs text-ink-500">{priceLabel}</span>

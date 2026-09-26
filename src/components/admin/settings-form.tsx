@@ -10,7 +10,6 @@ interface Settings {
   whatsappNumber: string;
   upiId: string;
   upiPayeeName: string;
-  upiQrImageUrl: string;
   otpEnabled: boolean;
   razorpayEnabled: boolean;
   upiScreenshotEnabled: boolean;
@@ -120,14 +119,6 @@ export function SettingsForm({
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Field label="UPI ID" value={form.upiId} onChange={(upiId) => set({ upiId })} hint="e.g. turf@okicici" />
             <Field label="Payee name" value={form.upiPayeeName} onChange={(upiPayeeName) => set({ upiPayeeName })} />
-            <div className="sm:col-span-2">
-              <Field
-                label="UPI QR image URL"
-                value={form.upiQrImageUrl}
-                onChange={(upiQrImageUrl) => set({ upiQrImageUrl })}
-                hint="Path or URL of the QR image customers scan"
-              />
-            </div>
           </div>
         </section>
 

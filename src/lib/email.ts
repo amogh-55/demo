@@ -193,19 +193,3 @@ export function ownerBookingEmail(facts: BookingEmailFacts): Omit<EmailMessage, 
     text,
   };
 }
-
-/** The customer's copy: proof, and what to bring. */
-export function customerBookingEmail(facts: BookingEmailFacts): Omit<EmailMessage, "to"> {
-  const { html, text } = render(
-    facts,
-    "Your booking is confirmed",
-    facts.amountRemaining > 0
-      ? `Thanks, ${facts.customerName}. Your slot is reserved. Please bring ${rupees(facts.amountRemaining)} to pay at the ground.`
-      : `Thanks, ${facts.customerName}. Your slot is reserved and paid in full. Just turn up.`,
-  );
-  return {
-    subject: `Booking confirmed — ${facts.reference} — ${facts.date} ${facts.time}`,
-    html,
-    text,
-  };
-}

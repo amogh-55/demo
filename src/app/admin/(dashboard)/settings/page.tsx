@@ -50,7 +50,6 @@ export default async function AdminSettingsPage() {
           whatsappNumber: settings.whatsappNumber,
           upiId: settings.upiId,
           upiPayeeName: settings.upiPayeeName,
-          upiQrImageUrl: settings.upiQrImageUrl,
           otpEnabled: settings.otpEnabled,
           razorpayEnabled: settings.razorpayEnabled,
           upiScreenshotEnabled: settings.upiScreenshotEnabled,

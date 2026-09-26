@@ -245,7 +245,6 @@ describe("settings and login", () => {
       whatsappNumber: "9876543210",
       upiId: "turf@okicici",
       upiPayeeName: "Turf Arena",
-      upiQrImageUrl: "",
     }).success, true);
 
     assert.equal(settingsSchema.safeParse({
@@ -254,25 +253,7 @@ describe("settings and login", () => {
       whatsappNumber: "9876543210",
       upiId: "not-a-upi-id",
       upiPayeeName: "Turf Arena",
-      upiQrImageUrl: "",
     }).success, false);
-  });
-
-  /** It ends up in an <img src> on the payment screen, so it is a link or nothing. */
-  it("refuses a UPI QR image that is not an http link", () => {
-    const base = {
-      businessName: "Turf",
-      supportPhone: "9876543210",
-      whatsappNumber: "9876543210",
-      upiId: "turf@okicici",
-      upiPayeeName: "Turf Arena",
-    };
-    for (const upiQrImageUrl of ["javascript:alert(1)", "data:text/html,<script>", "not a url"]) {
-      assert.equal(settingsSchema.safeParse({ ...base, upiQrImageUrl }).success, false, upiQrImageUrl);
-    }
-    for (const upiQrImageUrl of ["https://cdn.example.com/qr.png", ""]) {
-      assert.equal(settingsSchema.safeParse({ ...base, upiQrImageUrl }).success, true, `"${upiQrImageUrl}"`);
-    }
   });
 
   it("requires a password long enough to be worth hashing", () => {

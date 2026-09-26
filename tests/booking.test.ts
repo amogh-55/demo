@@ -3245,7 +3245,7 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
 
     /** Confirms one booking with the owner's switch in the given position. */
-    async function addressesEmailed(emailOnBooking: boolean, customerEmail?: string) {
+    async function addressesEmailed(emailOnBooking: boolean) {
       await collections.settings(db).updateOne({ _id: "business" }, { $set: { emailOnBooking } }, { upsert: true });
       const hold = await service.createHold({
         resourceId: RESOURCE_ID,
@@ -3257,7 +3257,6 @@ describe("booking engine", { skip: !HAS_DB }, () => {
         holdToken: hold.holdToken,
         customerName: "Ravi Kumar",
         customerPhone: "9876543210",
-        customerEmail,
         paymentScreenshotKey: SCREENSHOT,
         utr: UTR,
       });
@@ -3274,10 +3273,6 @@ describe("booking engine", { skip: !HAS_DB }, () => {
 
     it("emails the owner nothing once they untick it", async () => {
       assert.deepEqual(await addressesEmailed(false), []);
-    });
-
-    it("still sends the customer their own copy with the owner's switched off", async () => {
-      assert.deepEqual(await addressesEmailed(false, "player@example.com"), ["player@example.com"]);
     });
 
     /** The owner took ₹200 on the call. The email used to go out before that was recorded, saying ₹0. */

@@ -15,7 +15,6 @@ export const defaultSettings = (): Omit<SettingsDoc, "_id"> => ({
   whatsappNumber: (process.env.BUSINESS_WHATSAPP || process.env.BUSINESS_PHONE || "").replace(/\D/g, "").slice(-10),
   upiId: process.env.UPI_ID || "",
   upiPayeeName: process.env.UPI_PAYEE_NAME || "",
-  upiQrImageUrl: process.env.UPI_QR_IMAGE_URL || "",
   // Both default OFF. Every SMS costs the owner money, so nothing sends until
   // they have an account and switch it on deliberately.
   otpEnabled: false,

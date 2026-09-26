@@ -375,14 +375,6 @@ export interface BookingDoc {
   customerName: string;
   /** Normalised to 10 digits, no country code. */
   customerPhone: string;
-  /**
-   * Optional, and asked for only so a confirmation can be emailed.
-   *
-   * Deliberately not required: the ground's customers book from a phone with a
-   * thumb, and a mandatory email field costs more bookings than the emails are
-   * worth. Absent simply means no customer copy is sent.
-   */
-  customerEmail?: string | null;
   /** True when an OTP was verified for this number at booking time. */
   phoneVerified: boolean;
   /**
@@ -460,7 +452,6 @@ export interface SettingsDoc {
   whatsappNumber: string;
   upiId: string;
   upiPayeeName: string;
-  upiQrImageUrl: string;
   /**
    * Mobile-number verification for customers, switchable without a deploy.
    *

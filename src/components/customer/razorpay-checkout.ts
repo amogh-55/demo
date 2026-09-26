@@ -34,7 +34,7 @@ export interface CheckoutOptions {
   currency: string;
   businessName: string;
   description: string;
-  prefill: { name: string; contact: string; email: string };
+  prefill: { name: string; contact: string };
 }
 
 interface RazorpayInstance {

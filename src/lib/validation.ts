@@ -32,20 +32,6 @@ export const phoneSchema = z
   })
   .refine((v) => /^[6-9]\d{9}$/.test(v), "Enter a valid 10-digit Indian mobile number");
 
-/**
- * A customer's email address, which exists only so a confirmation can be sent to
- * it. Optional everywhere — an empty string means "they did not give one" rather
- * than a validation failure, because a blank optional field is what an untouched
- * input actually submits.
- */
-export const optionalEmailSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .max(120, "That email address is too long")
-  .refine((v) => v === "" || /^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test(v), "Enter a valid email address, or leave it blank")
-  .transform((v) => (v === "" ? null : v));
-
 export const customerNameSchema = z
   .string()
   .trim()
@@ -131,8 +117,6 @@ export const bookingSubmitSchema = z.object({
    * customer staring at a demand for a UTR they were never asked to produce.
    */
   paymentMethod: z.enum(["UPI_MANUAL", "RAZORPAY"]).optional(),
-  /** Optional. Only ever used to email a confirmation. */
-  customerEmail: optionalEmailSchema.nullish().transform((v) => v ?? null),
 });
 
 /**
@@ -480,12 +464,6 @@ export const settingsSchema = z.object({
     .trim()
     .regex(/^[\w.\-]{2,60}@[a-zA-Z]{2,30}$/, "Enter a valid UPI ID, e.g. name@bank"),
   upiPayeeName: z.string().trim().min(2).max(80),
-  /**
-   * Checked like the maps link rather than taken as free text: this value is put
-   * straight into an <img src> on the payment screen, so a "javascript:" or
-   * "data:" URL saved here would be served to every customer paying.
-   */
-  upiQrImageUrl: httpUrlSchema.default(""),
   otpEnabled: z.boolean().default(false),
   /** Has no effect without Razorpay keys in the environment; the form says so. */
   razorpayEnabled: z.boolean().default(false),

@@ -1,7 +1,6 @@
 import "server-only";
 import { collections, getDb } from "@/lib/db";
 import {
-  customerBookingEmail,
   escapeHtml as esc,
   ownerBookingEmail,
   ownerEmail,
@@ -15,31 +14,29 @@ import { formatBusinessDate, formatRange, minutesToDuration } from "@/lib/time";
 import type { BookingDoc } from "@/lib/types";
 
 /**
- * The confirmation email, sent once per booking.
+ * The owner's email about a confirmed booking, sent once per booking.
+ * Customers are not emailed — the free Resend plan is 100 emails a day.
  *
  * "Once" is the whole difficulty. A confirmed booking can be announced from three
  * places — the browser's success callback, the Razorpay webhook that says the same
- * thing a moment later, and an admin pressing Accept — and a customer who gets
- * three identical emails for one booking assumes they have been charged three
- * times. So the flag that records the send is flipped by a conditional update
- * first, and only the caller whose update actually modified the document goes on
- * to send. That is atomic across instances and across a retried webhook.
+ * thing a moment later, and an admin pressing Accept — and three identical emails
+ * for one booking read as three bookings. So the flag that records the send is
+ * flipped by a conditional update first, and only the caller whose update actually
+ * modified the document goes on to send. That is atomic across instances and across a retried webhook.
  */
 export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void> {
   if (!resendConfigured()) return;
 
-  // The owner's copy is a switch in Admin -> Settings, because it is their own
-  // inbox and a busy ground confirms a lot of bookings. The customer's copy is
-  // not: they asked for it by typing their address into the booking form.
+  // A switch in Admin -> Settings, because it is their own inbox and a busy
+  // ground confirms a lot of bookings.
   const settings = await getSettings();
   // A phone booking has its own switch: the owner took it, so the email only
   // tells them what they already know, and each one uses up free quota.
   const ownerWantsIt = settings.emailOnBooking && (!booking.createdBy || settings.emailOnPhoneBooking);
   const toOwner = ownerWantsIt ? ownerEmail() : "";
-  // Nothing to say to anyone: owner copy off or unconfigured, and no customer
-  // address given. Checked before the flag is claimed so a later configuration
-  // fix still has a booking to email about.
-  if (!toOwner && !booking.customerEmail) return;
+  // Checked before the flag is claimed so a later configuration fix still has a
+  // booking to email about.
+  if (!toOwner) return;
 
   const db = await getDb();
   // `: null` matches a missing field as well as a null one, which is what every
@@ -79,16 +76,11 @@ export async function notifyBookingConfirmed(booking: BookingDoc): Promise<void>
     supportPhone: settings.supportPhone,
   };
 
-  // Sent in parallel and never awaited by the payment path that called this: an
-  // email is a courtesy on top of money that has already arrived.
-  const results = await Promise.all([
-    toOwner ? sendEmail({ to: toOwner, ...ownerBookingEmail(facts) }) : Promise.resolve(false),
-    booking.customerEmail
-      ? sendEmail({ to: booking.customerEmail, ...customerBookingEmail(facts) })
-      : Promise.resolve(false),
-  ]);
+  // Never awaited by the payment path that called this: an email is a courtesy
+  // on top of money that has already arrived.
+  const sent = await sendEmail({ to: toOwner, ...ownerBookingEmail(facts) });
 
-  log.info("booking_emails_sent", { reference: booking.reference, owner: results[0], customer: results[1] });
+  log.info("booking_emails_sent", { reference: booking.reference, owner: sent });
 }
 
 /**

@@ -9,7 +9,7 @@ import { freeRunLength, hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto, locationCover } from "@/lib/photos";
 import { Msg91OtpWidget } from "./msg91-otp-widget";
 import { openRazorpayCheckout } from "./razorpay-checkout";
-import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
 
@@ -110,7 +110,7 @@ interface OrderResponse {
   amount: number;
   businessName: string;
   description: string;
-  prefill: { name: string; contact: string; email: string };
+  prefill: { name: string; contact: string };
 }
 
 /** Slow poll while the slot list is on screen. Gentle enough not to hammer the API. */
@@ -159,7 +159,6 @@ export function BookingFlow({
   today,
   bookingWindowDays,
   otpEnabled,
-  emailRequired,
   otpWidget,
   onlinePaymentReady,
   manualPaymentAllowed,
@@ -180,8 +179,6 @@ export function BookingFlow({
    * the server checks it again on submission, so a stale page cannot skip it.
    */
   otpEnabled: boolean;
-  /** On while the owner has booking emails switched on in Settings. The server checks it too. */
-  emailRequired: boolean;
   /**
    * MSG91's widget credentials, or null when they are not configured. Read on the
    * server so they are not in a NEXT_PUBLIC_ variable; the AuthKey that makes a
@@ -236,8 +233,6 @@ export function BookingFlow({
 
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
-  /** Optional, and only ever used to email a confirmation. */
-  const [email, setEmail] = React.useState("");
 
   /** The exact number that was verified, so editing a digit invalidates it. */
   const [verifiedPhone, setVerifiedPhone] = React.useState<string | null>(null);
@@ -799,7 +794,6 @@ export function BookingFlow({
         body: JSON.stringify({
           customerName: name,
           customerPhone: phone,
-          customerEmail: email,
           paymentScreenshotKey: screenshotKey,
           utr: hold?.payAtVenue ? null : utrDigits,
           payAdvance,
@@ -833,7 +827,6 @@ export function BookingFlow({
           body: JSON.stringify({
             customerName: name,
             customerPhone: phone,
-            customerEmail: email,
             paymentScreenshotKey: null,
             utr: null,
             payAdvance,
@@ -931,24 +924,7 @@ export function BookingFlow({
       ? "Enter a 10-digit Indian mobile number, starting 6, 7, 8 or 9."
       : null;
 
-  /**
-   * Blank means "no email" — unless the owner has booking emails on, when it is
-   * required. Anything typed has to look like an address, because a typo here is
-   * a confirmation that silently goes nowhere. The server checks the same thing;
-   * this only says so before the form is sent.
-   */
-  const emailProblem =
-    email.trim().length === 0
-      ? emailRequired
-        ? "Email is required for you to get the confirmation."
-        : null
-      : !/^[^\s@]+@[^\s@.]+\.[^\s@]{2,}$/.test(email.trim())
-        ? emailRequired
-          ? "Enter a valid email address."
-          : "Enter a valid email address, or leave it blank."
-        : null;
-
-  const detailsValid = !nameProblem && !phoneProblem && !emailProblem && phoneVerified;
+  const detailsValid = !nameProblem && !phoneProblem && phoneVerified;
 
   /**
    * Which fields the customer has finished with.
@@ -958,8 +934,8 @@ export function BookingFlow({
    * off mid-word reads as the form arguing with them. The message appears when
    * they leave the field, and disappears the moment they fix it.
    */
-  const [touched, setTouched] = React.useState<{ name?: boolean; phone?: boolean; email?: boolean }>({});
-  const leave = (field: "name" | "phone" | "email") => () => setTouched((t) => ({ ...t, [field]: true }));
+  const [touched, setTouched] = React.useState<{ name?: boolean; phone?: boolean }>({});
+  const leave = (field: "name" | "phone") => () => setTouched((t) => ({ ...t, [field]: true }));
 
   /**
    * Whether the payment step may be submitted, and if not, what is missing.
@@ -1400,7 +1376,7 @@ export function BookingFlow({
                               onClick={() => setOpenHour(expanded && !holdsSelection ? "none" : group.hourMin)}
                               className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5"
                             >
-                              <span className="text-base font-semibold text-white">{formatMinutes(group.hourMin)}</span>
+                              <span className="text-base font-semibold text-white">{formatCompactRange(group.hourMin, group.hourMin + 60)}</span>
                               <span className="flex items-center gap-2 text-sm">
                                 <span className={freeStartCount > 0 ? "text-ink-300" : "text-ink-500"}>
                                   {freeStartCount > 0
@@ -1645,29 +1621,6 @@ export function BookingFlow({
                     <FieldError id="customer-phone-error">{phoneProblem}</FieldError>
                   ) : null}
                 </div>
-                {/* Required only while the owner has booking emails on (Settings). */}
-                <div className="sm:col-span-2">
-                  <label className="field-label" htmlFor="customer-email">
-                    Email {emailRequired ? null : <span className="font-normal text-ink-400">(optional)</span>}
-                  </label>
-                  <input
-                    id="customer-email"
-                    className="field-input"
-                    type="email"
-                    inputMode="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    onBlur={leave("email")}
-                    placeholder="you@example.com"
-                    required={emailRequired}
-                    aria-invalid={emailProblem && touched.email ? true : undefined}
-                    aria-describedby={emailProblem && touched.email ? "customer-email-error" : undefined}
-                  />
-                  {emailProblem && touched.email ? (
-                    <FieldError id="customer-email-error">{emailProblem}</FieldError>
-                  ) : null}
-                </div>
               </div>
 
               {otpEnabled ? (
@@ -1709,9 +1662,9 @@ export function BookingFlow({
               {/* Named here as well as under the field. On a phone the keyboard
                   covers the inputs, so the only thing the customer can see when
                   they reach for the button is the button. */}
-              {!detailsValid && (touched.name || touched.phone || touched.email) ? (
+              {!detailsValid && (touched.name || touched.phone) ? (
                 <p className="mt-4 text-sm font-medium text-amber-300">
-                  {nameProblem ?? phoneProblem ?? emailProblem ?? "Verify your mobile number to continue."}
+                  {nameProblem ?? phoneProblem ?? "Verify your mobile number to continue."}
                 </p>
               ) : null}
 
@@ -1834,7 +1787,6 @@ export function BookingFlow({
                   <dl className="mt-4 divide-y divide-white/10 text-sm">
                     <Row label="Name" value={name} />
                     <Row label="Mobile" value={phone} />
-                    {email.trim() ? <Row label="Email" value={email.trim()} /> : null}
                     <Row label="Ground" value={hold.locationName} />
                     <Row label="Booking" value={hold.facilityName} />
                     <Row label="Date" value={formatBusinessDate(hold.date)} />

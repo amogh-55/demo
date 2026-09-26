@@ -59,7 +59,6 @@ export async function POST(request: Request) {
       prefill: {
         name: booking.customerName,
         contact: `+91${booking.customerPhone}`,
-        email: booking.customerEmail ?? "",
       },
     });
   } catch (err) {

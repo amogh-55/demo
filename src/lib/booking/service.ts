@@ -831,8 +831,6 @@ export interface SubmitBookingInput {
    * client that could book without paying or proving anything.
    */
   paymentMethod?: "UPI_MANUAL" | "RAZORPAY";
-  /** Optional. Only ever used to email a confirmation. */
-  customerEmail?: string | null;
   /**
    * Whether the pay-by-UPI-and-send-a-screenshot route is still on offer.
    *
@@ -1003,7 +1001,6 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       priceBreakdown,
       customerName: input.customerName,
       customerPhone: input.customerPhone,
-      customerEmail: input.customerEmail ?? null,
       phoneVerified: input.verifiedPhone === input.customerPhone,
       createdBy: bookedBy,
       // A pay-at-venue session is confirmed immediately: there is nothing for an

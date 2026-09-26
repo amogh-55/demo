@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Bell, CalendarRange, ClipboardList, LayoutDashboard, LogOut, PhoneCall, Settings } from "lucide-react";
+import { CalendarRange, ClipboardList, LayoutDashboard, LogOut, PhoneCall, Settings } from "lucide-react";
 import { api } from "@/lib/client";
 import { Button, Spinner, cn } from "@/components/ui/primitives";
 
@@ -42,36 +42,6 @@ function PitchMark({ className }: { className?: string }) {
   );
 }
 
-/**
- * Payments waiting for the owner to check — the To verify tab, counted across
- * every ground so the number means the same on every page.
- *
- * Asked for again on every page change, when the app comes back to the front,
- * and whenever the bookings screen says it just changed something.
- */
-function useToVerify(pathname: string): number {
-  const [count, setCount] = React.useState(0);
-  React.useEffect(() => {
-    let live = true;
-    const refresh = () => {
-      api<{ counts?: { verify?: number } }>("/api/admin/bookings?page=1")
-        .then((r) => live && setCount(r.counts?.verify ?? 0))
-        .catch(() => {
-          // A bell that cannot update keeps its last number; it is a nudge, not a record.
-        });
-    };
-    refresh();
-    window.addEventListener("admin:bookings-changed", refresh);
-    window.addEventListener("focus", refresh);
-    return () => {
-      live = false;
-      window.removeEventListener("admin:bookings-changed", refresh);
-      window.removeEventListener("focus", refresh);
-    };
-  }, [pathname]);
-  return count;
-}
-
 /** Sidebar on desktop, bottom tab bar on phones — the owner reviews bookings on mobile. */
 export function AdminShell({ session, children }: { session: AdminSessionView; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -88,8 +58,6 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
     }
   }
 
-  const toVerify = useToVerify(pathname);
-
   const isActive = (href: string) => (href === "/admin" ? pathname === "/admin" : pathname.startsWith(href));
 
   /**
@@ -103,12 +71,12 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
    * says where you are, which is the one thing it cannot be wrong about.
    */
   const [pendingHref, setPendingHref] = React.useState<string | null>(null);
-  // The query counts too: the bell and the dashboard cards change only the tab.
+  // The query counts too: the dashboard cards change only the tab.
   const here = `${pathname}?${useSearchParams().toString()}`;
   React.useEffect(() => setPendingHref(null), [here]);
 
   /*
-   * Any link inside the admin, not only the tabs — the bell, a dashboard card,
+   * Any link inside the admin, not only the tabs — a dashboard card,
    * "Open in Bookings" — starts the same busy state. Listened for in the capture
    * phase because Next's <Link> cancels the click's default before it bubbles.
    *
@@ -192,18 +160,6 @@ export function AdminShell({ session, children }: { session: AdminSessionView; c
             <span className="hidden text-sm text-ink-500 sm:inline">
               Signed in as <span className="font-medium text-ink-700">{session.displayName}</span>
             </span>
-            <Link
-              href="/admin/bookings?tab=verify"
-              aria-label={toVerify > 0 ? `${toVerify} payment${toVerify === 1 ? "" : "s"} to verify` : "Payments to verify"}
-              className="relative grid h-11 w-11 place-items-center rounded-full text-ink-700 transition-colors hover:bg-ink-100"
-            >
-              <Bell className="h-5 w-5" aria-hidden="true" />
-              {toVerify > 0 ? (
-                <span className="absolute right-1 top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
-                  {toVerify > 9 ? "9+" : toVerify}
-                </span>
-              ) : null}
-            </Link>
             <Button variant="danger" size="sm" className="h-11 sm:h-9" onClick={signOut} disabled={signingOut}>
               <LogOut className="h-4 w-4" aria-hidden="true" />
               {signingOut ? "Signing out…" : "Sign out"}

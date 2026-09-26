@@ -11,9 +11,9 @@ export const BOOKINGS_PAGE_SIZE = 20;
  *
  * The status half matters: a booking rejected while its screenshot was unchecked
  * — the slot blocked for rain, say — keeps that attempt PENDING forever, and
- * without it the dead booking sat in the queue and rang the bell. It belongs to
- * the Rejected tab only. Shared by the tab, the bell and the dashboard card so
- * the three numbers cannot disagree.
+ * without it the dead booking sat in the queue forever. It belongs to the
+ * Rejected tab only. Shared by the tab and the dashboard card so the two numbers
+ * cannot disagree.
  */
 export const TO_VERIFY: Filter<BookingDoc> = {
   "payments.status": "PENDING",

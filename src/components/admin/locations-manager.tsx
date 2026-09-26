@@ -449,9 +449,6 @@ function LocationEditor({ location, onSaved }: { location: AdminLocation; onSave
         <div className="sm:col-span-2">
           <Text label="Description" value={form.description} onChange={(description) => setForm({ ...form, description })} />
         </div>
-        <div className="sm:col-span-2">
-          <Text label="Image path" value={form.image} onChange={(image) => setForm({ ...form, image })} />
-        </div>
       </div>
       {error ? <Alert tone="error" className="mt-3">{error}</Alert> : null}
       <Button className="mt-4 w-full sm:w-auto" onClick={save} disabled={busy}>
