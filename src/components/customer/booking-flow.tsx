@@ -1516,8 +1516,8 @@ export function BookingFlow({
                 under the grid it was a scroll away, and a customer who had tapped
                 a slot saw nothing happen and wondered why they could not book. */}
             {selection && readyToHold ? (
-              <div className="fixed inset-x-0 bottom-0 z-30 border-t border-lime-400/30 bg-ink-900/95 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-3 shadow-[0_-8px_24px_rgba(0,0,0,0.45)] backdrop-blur">
-                <div className="container flex max-w-3xl items-center gap-3">
+              <div className="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))]">
+                <div className="mx-auto flex max-w-3xl items-center gap-3 rounded-3xl border border-white/15 bg-ink-800/95 py-3 pl-5 pr-3 shadow-[0_8px_32px_rgba(0,0,0,0.6)] backdrop-blur">
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-white">{formatRange(selection.startMin, selection.endMin)}</p>
                     <p className="text-sm text-ink-400">
