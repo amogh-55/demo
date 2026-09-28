@@ -1004,6 +1004,69 @@ describe("booking engine", { skip: !HAS_DB }, () => {
       assert.equal(booking.status, "PENDING");
       assert.equal(booking.phoneVerified, true);
     });
+
+    /**
+     * The bowling machine has its own switch: short sessions are booked with no
+     * payment at all, so the owner may want codes there and nowhere else.
+     */
+    it("refuses an unverified bowling booking when the bowling switch is on", async () => {
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: futureDate(12),
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      await assert.rejects(
+        () =>
+          service.submitBooking({
+            holdToken: hold.holdToken,
+            customerName: "Ravi Kumar",
+            customerPhone: "9876543210",
+            paymentScreenshotKey: null,
+            requirePhoneVerification: false,
+            requireBowlingPhoneVerification: true,
+            verifiedPhone: null,
+          }),
+        /verify your mobile number/i,
+      );
+    });
+
+    it("leaves bowling alone when only the hourly switch is on", async () => {
+      const hold = await service.createHold({
+        resourceId: BOWLING_ID,
+        date: futureDate(12),
+        startMin: 1080,
+        overs: 20,
+        ballTypeId: "synthetic",
+      });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: null,
+        requirePhoneVerification: true,
+        requireBowlingPhoneVerification: false,
+        verifiedPhone: null,
+      });
+      assert.equal(booking.status, "CONFIRMED");
+      assert.equal(booking.phoneVerified, false);
+    });
+
+    it("leaves hourly slots alone when only the bowling switch is on", async () => {
+      const hold = await service.createHold({ resourceId: RESOURCE_ID, date: futureDate(12), startMin: 1020, endMin: 1080 });
+      const booking = await service.submitBooking({
+        holdToken: hold.holdToken,
+        customerName: "Ravi Kumar",
+        customerPhone: "9876543210",
+        paymentScreenshotKey: SCREENSHOT,
+        utr: UTR,
+        requirePhoneVerification: false,
+        requireBowlingPhoneVerification: true,
+        verifiedPhone: null,
+      });
+      assert.equal(booking.status, "PENDING");
+    });
   });
 
   describe("concurrency", () => {

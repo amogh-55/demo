@@ -42,8 +42,10 @@ function hashCode(phone: string, code: string): string {
   return crypto.createHash("sha256").update(`${phone}:${code}`).digest("hex");
 }
 
+/** Whether codes may be sent at all: either service's switch is enough. */
 export async function otpRequired(): Promise<boolean> {
-  return (await getSettings()).otpEnabled;
+  const settings = await getSettings();
+  return settings.otpEnabled || settings.bowlingOtpEnabled;
 }
 
 export interface SendOtpResult {

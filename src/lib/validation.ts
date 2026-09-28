@@ -465,6 +465,7 @@ export const settingsSchema = z.object({
     .regex(/^[\w.\-]{2,60}@[a-zA-Z]{2,30}$/, "Enter a valid UPI ID, e.g. name@bank"),
   upiPayeeName: z.string().trim().min(2).max(80),
   otpEnabled: z.boolean().default(false),
+  bowlingOtpEnabled: z.boolean().default(false),
   /** Has no effect without Razorpay keys in the environment; the form says so. */
   razorpayEnabled: z.boolean().default(false),
   /** Ignored while the gateway is unavailable — see SettingsDoc. */

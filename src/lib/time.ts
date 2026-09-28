@@ -88,7 +88,9 @@ export function formatMinutes(minuteOfDay: number): string {
  * a single start time as the whole booking.
  */
 export function formatCompactRange(startMin: number, endMin: number): string {
-  const part = (minuteOfDay: number) => {
+  // "12 – 12 AM" reads as nothing at all.
+  if (endMin - startMin >= MINUTES_IN_DAY) return "24 hours";
+  const part =(minuteOfDay: number) => {
     const total = ((minuteOfDay % MINUTES_IN_DAY) + MINUTES_IN_DAY) % MINUTES_IN_DAY;
     const h24 = Math.floor(total / 60);
     const mm = total % 60;

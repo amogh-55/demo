@@ -51,6 +51,7 @@ export default async function AdminSettingsPage() {
           upiId: settings.upiId,
           upiPayeeName: settings.upiPayeeName,
           otpEnabled: settings.otpEnabled,
+          bowlingOtpEnabled: settings.bowlingOtpEnabled,
           razorpayEnabled: settings.razorpayEnabled,
           upiScreenshotEnabled: settings.upiScreenshotEnabled,
           emailOnBooking: settings.emailOnBooking,

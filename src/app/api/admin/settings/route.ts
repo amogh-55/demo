@@ -18,6 +18,7 @@ export async function GET() {
         upiId: settings.upiId,
         upiPayeeName: settings.upiPayeeName,
         otpEnabled: settings.otpEnabled,
+        bowlingOtpEnabled: settings.bowlingOtpEnabled,
         razorpayEnabled: settings.razorpayEnabled,
         upiScreenshotEnabled: settings.upiScreenshotEnabled,
         emailOnBooking: settings.emailOnBooking,
@@ -42,6 +43,7 @@ export async function PUT(request: Request) {
       saved: true,
       settings: {
         otpEnabled: saved.otpEnabled,
+        bowlingOtpEnabled: saved.bowlingOtpEnabled,
         razorpayEnabled: saved.razorpayEnabled,
         upiScreenshotEnabled: saved.upiScreenshotEnabled,
         emailOnBooking: saved.emailOnBooking,

@@ -457,8 +457,17 @@ export interface SettingsDoc {
    *
    * Off means the booking flow never asks for a code and no SMS is ever sent,
    * which is what keeps the bill at zero until the owner has an SMS account.
+   *
+   * Covers the hourly services (box cricket, nets, courts), which are paid for
+   * online anyway. The bowling machine has its own switch below.
    */
   otpEnabled: boolean;
+  /**
+   * The same check for bowling-machine (OVERS) bookings only. Short sessions are
+   * booked without paying anything online, so they are the ones a made-up
+   * number can take — the owner may want codes here and nowhere else.
+   */
+  bowlingOtpEnabled: boolean;
   /**
    * Offer card/UPI/netbanking payment through Razorpay at booking time.
    *

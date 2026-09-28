@@ -801,8 +801,13 @@ export interface SubmitBookingInput {
    * from the request body — a client claiming "I am verified" proves nothing.
    */
   verifiedPhone?: string | null;
-  /** When true a booking is refused unless `verifiedPhone` matches the number given. */
+  /**
+   * When true an hourly booking is refused unless `verifiedPhone` matches the
+   * number given.
+   */
   requirePhoneVerification?: boolean;
+  /** The same, for bowling-machine (OVERS) bookings — the owner switches each separately. */
+  requireBowlingPhoneVerification?: boolean;
   /**
    * The storage provider genuinely refused a valid screenshot for this hold.
    *
@@ -866,13 +871,6 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
 
   const bookedBy = input.bookedBy ?? null;
 
-  // Checked before the slots are consumed, so a customer who has not verified
-  // their number keeps the hold and can finish rather than losing the slot. Staff
-  // on the phone are exempt: the owner is talking to the person.
-  if (!bookedBy && input.requirePhoneVerification && input.verifiedPhone !== input.customerPhone) {
-    throw appError("VALIDATION", "Please verify your mobile number before booking.");
-  }
-
   const expired = units.some(
     (u) => u.status !== "HELD" || !u.holdUntil || u.holdUntil.getTime() <= now.getTime(),
   );
@@ -882,6 +880,16 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
   const date = units[0]!.date;
   const ctx = await loadResourceContext(db, resourceId, true);
   const { location, facility, resource, config } = ctx;
+
+  // Checked before the slots are consumed, so a customer who has not verified
+  // their number keeps the hold and can finish rather than losing the slot. Staff
+  // on the phone are exempt: the owner is talking to the person. Which switch
+  // applies is decided by the facility the hold is actually on, not by the client.
+  const mustVerify =
+    facility.kind === "OVERS" ? input.requireBowlingPhoneVerification : input.requirePhoneVerification;
+  if (!bookedBy && mustVerify && input.verifiedPhone !== input.customerPhone) {
+    throw appError("VALIDATION", "Please verify your mobile number before booking.");
+  }
   const template = ctx.templateFor(date);
 
   // Price is recomputed from the server-side schedule; the browser never supplies it.

@@ -11,6 +11,7 @@ interface Settings {
   upiId: string;
   upiPayeeName: string;
   otpEnabled: boolean;
+  bowlingOtpEnabled: boolean;
   razorpayEnabled: boolean;
   upiScreenshotEnabled: boolean;
   emailOnBooking: boolean;
@@ -219,7 +220,7 @@ export function SettingsForm({
           {!smsReady ? (
             <Alert tone="warning" className="mt-3">
               No SMS provider is connected yet, so no verification code can be delivered. Add your provider keys to the
-              deployment before switching that on.
+              deployment before switching either verification box on.
             </Alert>
           ) : null}
 
@@ -244,11 +245,18 @@ export function SettingsForm({
                 onChange={(emailOnPhoneBooking) => set({ emailOnPhoneBooking })}
               />
             </div>
+            {/* Two separate switches: hourly slots are paid online, bowling sessions often are not. */}
             <Toggle
-              label="Ask customers to verify their mobile number"
-              hint="Customers get a 4-digit code by SMS before they can book. Catches mistyped numbers, so you can always reach them."
+              label="Verify mobile number for box cricket, nets and courts"
+              hint="Customers get a code by SMS before they can book. Catches mistyped numbers, so you can always reach them."
               checked={form.otpEnabled}
               onChange={(otpEnabled) => set({ otpEnabled })}
+            />
+            <Toggle
+              label="Verify mobile number for the bowling machine"
+              hint="Bowling sessions can be booked without paying online, so a code here stops made-up numbers holding the machine."
+              checked={form.bowlingOtpEnabled}
+              onChange={(bowlingOtpEnabled) => set({ bowlingOtpEnabled })}
             />
           </div>
 

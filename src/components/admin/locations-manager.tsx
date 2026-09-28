@@ -76,6 +76,8 @@ interface Tree {
 }
 
 const HOURS = Array.from({ length: 25 }, (_, i) => i * 60);
+/** Round the clock: every slot of the business day, midnight to midnight. */
+const ALL_DAY = { openMin: 0, closeMin: 1440 };
 
 /**
  * A price the owner has not typed yet.
@@ -188,7 +190,7 @@ function scheduleProblems(config: FacilityConfig, kind: "HOURLY" | "OVERS"): Pro
   const p: Problems = {};
 
   if (!(config.closeMin > config.openMin)) {
-    p.closeMin = "Closing time must be after opening time.";
+    p.closeMin = "Closing time must be after opening time. Open round the clock? Tick “Open 24 hours”.";
   } else if ((config.closeMin - config.openMin) % config.slotMinutes !== 0) {
     p.closeMin = `Opening hours must divide into whole ${config.slotMinutes}-minute slots.`;
   }
@@ -705,6 +707,7 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
   const [saved, setSaved] = React.useState(false);
 
   const isOvers = facility.kind === "OVERS";
+  const openAllDay = config.openMin === ALL_DAY.openMin && config.closeMin === ALL_DAY.closeMin;
   const problems = scheduleProblems(config, facility.kind);
   const problemCount = Object.keys(problems).length;
 
@@ -781,7 +784,10 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
           <label className="field-label" htmlFor="open-min">
             Opens at
           </label>
-          <select id="open-min" className="field-input" value={config.openMin} onChange={(e) => update({ openMin: Number(e.target.value) })}>
+          <select id="open-min" className="field-input" value={config.openMin} onChange={(e) => {
+            const openMin = Number(e.target.value);
+            update(openMin === config.closeMin ? ALL_DAY : { openMin });
+          }}>
             {HOURS.slice(0, 24).map((m) => (
               <option key={m} value={m}>
                 {formatMinutes(m)}
@@ -799,7 +805,12 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
             aria-invalid={problems.closeMin ? true : undefined}
             aria-describedby={problems.closeMin ? "close-min-error" : undefined}
             value={config.closeMin}
-            onChange={(e) => update({ closeMin: Number(e.target.value) })}
+            onChange={(e) => {
+              const closeMin = Number(e.target.value);
+              // Closing when you open (6 AM – 6 AM) means round the clock. A day's
+              // slots run midnight to midnight, so that is stored as 12 AM – 12 AM.
+              update(closeMin === config.openMin ? ALL_DAY : { closeMin });
+            }}
           >
             {HOURS.slice(1).map((m) => (
               <option key={m} value={m}>
@@ -808,6 +819,15 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
             ))}
           </select>
           {problems.closeMin ? <FieldError id="close-min-error">{problems.closeMin}</FieldError> : null}
+          <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-pitch-600"
+              checked={openAllDay}
+              onChange={(e) => update(e.target.checked ? ALL_DAY : { openMin: 6 * 60, closeMin: 23 * 60 })}
+            />
+            Open 24 hours
+          </label>
         </div>
         {/* Slot length and hold duration are deliberately not editable here. Slot
             length is the unit the double-booking index is built on — the server

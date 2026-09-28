@@ -74,6 +74,7 @@ export async function POST(request: Request) {
       allowManualPayment: manualAllowed,
       verifiedPhone,
       requirePhoneVerification: settings.otpEnabled,
+      requireBowlingPhoneVerification: settings.bowlingOtpEnabled,
       /*
        * Read from a cookie this server signed, never from the request body. It
        * is the only thing that lets a booking through without a screenshot, so

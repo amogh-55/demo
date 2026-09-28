@@ -159,6 +159,7 @@ export function BookingFlow({
   today,
   bookingWindowDays,
   otpEnabled,
+  bowlingOtpEnabled,
   otpWidget,
   onlinePaymentReady,
   manualPaymentAllowed,
@@ -177,8 +178,11 @@ export function BookingFlow({
   /**
    * Whether customers must verify their mobile number. Mirrors the admin switch;
    * the server checks it again on submission, so a stale page cannot skip it.
+   * Applies to hourly facilities; the bowling machine has its own switch.
    */
   otpEnabled: boolean;
+  /** The same, for bowling-machine (OVERS) bookings only. */
+  bowlingOtpEnabled: boolean;
   /**
    * MSG91's widget credentials, or null when they are not configured. Read on the
    * server so they are not in a NEXT_PUBLIC_ variable; the AuthKey that makes a
@@ -312,6 +316,7 @@ export function BookingFlow({
   const location = locations.find((l) => l.id === locationId);
   const facility = location?.facilities.find((f) => f.id === facilityId);
   const isOvers = facility?.kind === "OVERS";
+  const otpOn = isOvers ? bowlingOtpEnabled : otpEnabled;
 
   /* ── Keeping the location → facility → court chain valid ───────────── */
 
@@ -905,7 +910,7 @@ export function BookingFlow({
     }
   }
 
-  const phoneVerified = !otpEnabled || verifiedPhone === normalisePhone(phone);
+  const phoneVerified = !otpOn || verifiedPhone === normalisePhone(phone);
   /**
    * What is wrong with the details, per field.
    *
@@ -1623,7 +1628,7 @@ export function BookingFlow({
                 </div>
               </div>
 
-              {otpEnabled ? (
+              {otpOn ? (
                 <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.03] p-4">
                   {verifiedPhone === normalisePhone(phone) ? (
                     <p className="flex items-center gap-2 text-sm font-medium text-lime-400">

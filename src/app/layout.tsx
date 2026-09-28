@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Poppins } from "next/font/google";
+import { defaultSettings, getSettings } from "@/lib/settings";
 import "./globals.css";
 
 /**
@@ -14,27 +15,37 @@ const poppins = Poppins({
 });
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-const businessName = process.env.NEXT_PUBLIC_BUSINESS_NAME || "Cricket Turf Arena";
 
-export const metadata: Metadata = {
-  metadataBase: new URL(appUrl),
-  title: {
-    default: `${businessName} — Book a cricket turf near you`,
-    template: `%s · ${businessName}`,
-  },
-  description:
-    "Book floodlit cricket turfs by the hour across three locations. Pick your ground, choose a slot, pay by UPI and get confirmed on WhatsApp.",
-  openGraph: {
-    type: "website",
-    siteName: businessName,
-    title: `${businessName} — Book a cricket turf near you`,
-    description: "Three floodlit grounds. Hourly slots. Instant UPI payment and WhatsApp confirmation.",
-    url: appUrl,
-    images: [{ url: "/images/hero-turf-action.jpg", width: 1200, height: 630, alt: `${businessName} cricket turf` }],
-  },
-  icons: { icon: "/favicon.svg" },
-  robots: { index: true, follow: true },
-};
+/**
+ * Named from Settings, where the page header reads it too. The env name is only
+ * the first-run default; reading it here put one name on the tab and link
+ * previews and another on the page once the owner renamed the business.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const businessName = await getSettings().then(
+    (s) => s.businessName,
+    () => defaultSettings().businessName,
+  );
+  return {
+    metadataBase: new URL(appUrl),
+    title: {
+      default: `${businessName} — Book a cricket turf near you`,
+      template: `%s · ${businessName}`,
+    },
+    description:
+      "Book floodlit cricket turfs by the hour across three locations. Pick your ground, choose a slot, pay by UPI and get confirmed on WhatsApp.",
+    openGraph: {
+      type: "website",
+      siteName: businessName,
+      title: `${businessName} — Book a cricket turf near you`,
+      description: "Three floodlit grounds. Hourly slots. Instant UPI payment and WhatsApp confirmation.",
+      url: appUrl,
+      images: [{ url: "/images/hero-turf-action.jpg", width: 1200, height: 630, alt: `${businessName} cricket turf` }],
+    },
+    icons: { icon: "/favicon.svg" },
+    robots: { index: true, follow: true },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: "#0b0e13",
