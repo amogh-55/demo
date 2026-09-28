@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
+import { joinOvernight, splitOvernight } from "@/lib/booking/schedule";
 import { formatMinutes, minutesToDuration } from "@/lib/time";
 import { Alert, Button, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
@@ -164,9 +165,10 @@ function slotStarts(openMin: number, closeMin: number, slotMinutes: number): num
 function gapBands(rules: PriceRule[], openMin: number, closeMin: number, slotMinutes: number): PriceRule[] {
   const gaps: PriceRule[] = [];
   let run: { from: number; to: number } | null = null;
+  const halves = splitOvernight(rules);
 
   for (const start of slotStarts(openMin, closeMin, slotMinutes)) {
-    const priced = rules.some((r) => start >= r.fromMin && start < r.toMin);
+    const priced = halves.some((r) => start >= r.fromMin && start < r.toMin);
     if (priced) {
       if (run) gaps.push({ fromMin: run.from, toMin: run.to, price: UNSET });
       run = null;
@@ -211,7 +213,8 @@ function scheduleProblems(config: FacilityConfig, kind: "HOURLY" | "OVERS"): Pro
     const which = prefix === "weekend" ? "weekend price" : "price";
     rules.forEach((rule, i) => {
       const when = `${formatMinutes(rule.fromMin)}–${formatMinutes(rule.toMin)}`;
-      if (rule.toMin <= rule.fromMin) p[`${prefix}-range-${i}`] = "The end of a band must be after its start.";
+      // An end before the start is a night band running past midnight; only equal is meaningless.
+      if (rule.toMin === rule.fromMin) p[`${prefix}-range-${i}`] = "A band cannot start and end at the same time.";
       if (!isSet(rule.price)) p[`${prefix}-price-${i}`] = `Set a ${which} for ${when}.`;
       else if (rule.price < 0) p[`${prefix}-price-${i}`] = "A price cannot be negative.";
     });
@@ -701,7 +704,12 @@ function ResourcesEditor({
 }
 
 function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSaved: () => Promise<void> }) {
-  const [config, setConfig] = React.useState<FacilityConfig>(facility.config);
+  // Night bands are stored split at midnight; the owner edits them as one row.
+  const [config, setConfig] = React.useState<FacilityConfig>(() => ({
+    ...facility.config,
+    priceRules: joinOvernight(facility.config.priceRules),
+    weekendPriceRules: joinOvernight(facility.config.weekendPriceRules ?? []),
+  }));
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState(false);
@@ -740,7 +748,9 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
          * work, and hours get nudged by accident.
          */
         const kept = rules.filter(
-          (rule) => isSet(rule.price) || (rule.toMin > next.openMin && rule.fromMin < next.closeMin),
+          (rule) =>
+            isSet(rule.price) ||
+            splitOvernight([rule]).some((half) => half.toMin > next.openMin && half.fromMin < next.closeMin),
         );
         return kept.length === 0 ? kept : [...kept, ...gapBands(kept, next.openMin, next.closeMin, next.slotMinutes)];
       };
@@ -761,7 +771,12 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
     setBusy(true);
     setError(null);
     try {
-      await api(`/api/admin/facilities/${facility.id}`, { method: "PUT", body: JSON.stringify(config) });
+      const stored = {
+        ...config,
+        priceRules: splitOvernight(config.priceRules),
+        weekendPriceRules: splitOvernight(config.weekendPriceRules ?? []),
+      };
+      await api(`/api/admin/facilities/${facility.id}`, { method: "PUT", body: JSON.stringify(stored) });
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
       await onSaved();
@@ -1046,6 +1061,12 @@ function PriceBands({
                   </FieldError>
                 ) : null}
               </div>
+            ) : null}
+            {rule.toMin < rule.fromMin ? (
+              <p className="col-span-2 text-xs text-ink-500 sm:col-span-4">
+                Runs past midnight: {formatMinutes(rule.fromMin)}–12:00 AM and 12:00 AM–{formatMinutes(rule.toMin)} are
+                both charged this price.
+              </p>
             ) : null}
           </li>
         ))}

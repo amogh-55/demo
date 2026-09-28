@@ -14,6 +14,23 @@ export function priceForStart(rules: PriceRule[], startMin: number): number | nu
 }
 
 /**
+ * Night rates: the owner types "6 PM to 6 AM", but a business day runs 12 AM to
+ * 12 AM, so the engine keeps such a band as its two halves either side of
+ * midnight. These convert between what the owner sees and what is stored.
+ */
+export function splitOvernight<R extends { fromMin: number; toMin: number }>(rules: R[]): R[] {
+  return rules.flatMap((r) => (r.toMin > r.fromMin ? [r] : [{ ...r, toMin: 1440 }, { ...r, fromMin: 0 }]));
+}
+
+export function joinOvernight<R extends { fromMin: number; toMin: number; price: number }>(rules: R[]): R[] {
+  const evening = rules.find((r) => r.toMin === 1440 && r.fromMin > 0);
+  const morning = rules.find((r) => r.fromMin === 0 && r.toMin < 1440);
+  // Halves that meet (6 AM–12 AM and 12 AM–6 AM) are the whole day, not a night band.
+  if (!evening || !morning || evening.price !== morning.price || morning.toMin >= evening.fromMin) return rules;
+  return rules.filter((r) => r !== morning).map((r) => (r === evening ? { ...r, toMin: morning.toMin } : r));
+}
+
+/**
  * Whether a date is charged at weekend rates.
  *
  * Both halves matter: a ground with no weekend table charges one price all week,
@@ -53,8 +70,16 @@ export function buildDayTemplate(
   // so this only guards against a configuration edited straight into the database.
   if (!Number.isFinite(config.slotMinutes) || config.slotMinutes <= 0) return units;
   const rules = rulesForDate(config, date);
+  // The small hours belong to the night that started the evening before: 1 AM on
+  // a Sunday is Saturday night, so it costs what Saturday night costs, weekend
+  // rate or not. Only a band that really runs past midnight carries over.
+  const lastNight = date
+    ? joinOvernight(rulesForDate(config, istDateString(new Date(istInstant(date, 0).getTime() - 86_400_000)))).find(
+        (r) => r.toMin < r.fromMin,
+      )
+    : undefined;
   for (let start = config.openMin; start + config.slotMinutes <= config.closeMin; start += config.slotMinutes) {
-    const price = priceForStart(rules, start);
+    const price = lastNight && start < lastNight.toMin ? lastNight.price : priceForStart(rules, start);
     if (price === null) continue; // Unpriced time is not sellable.
     units.push({ startMin: start, endMin: start + config.slotMinutes, price });
   }

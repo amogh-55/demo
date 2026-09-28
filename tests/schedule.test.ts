@@ -4,6 +4,8 @@ import {
   applyBallPricing,
   buildDayTemplate,
   isWeekendRate,
+  joinOvernight,
+  splitOvernight,
   hoursTouched,
   minutesForOvers,
   oversLadder,
@@ -359,5 +361,73 @@ describe("weekend pricing", () => {
     assert.equal(saturday.find((u) => u.startMin === 19 * 60)!.price, 1200);
     const tuesday = buildDayTemplate(split, TUESDAY);
     assert.equal(tuesday.find((u) => u.startMin === 19 * 60)!.price, 900);
+  });
+});
+
+/** "6 PM to 6 AM" as the owner types it, versus the two halves the engine prices from. */
+describe("overnight price bands", () => {
+  const typed = [
+    { fromMin: 6 * 60, toMin: 18 * 60, price: 600 },
+    { fromMin: 18 * 60, toMin: 6 * 60, price: 700 },
+  ];
+  const stored = [
+    { fromMin: 6 * 60, toMin: 18 * 60, price: 600 },
+    { fromMin: 18 * 60, toMin: 1440, price: 700 },
+    { fromMin: 0, toMin: 6 * 60, price: 700 },
+  ];
+
+  it("splits a night band at midnight and joins it back", () => {
+    assert.deepEqual(splitOvernight(typed), stored);
+    assert.deepEqual(joinOvernight(stored), typed);
+  });
+
+  it("prices every hour of a 24-hour day from the split bands", () => {
+    const template = buildDayTemplate({ slotMinutes: 60, openMin: 0, closeMin: 1440, priceRules: splitOvernight(typed) });
+    assert.equal(template.length, 24);
+    assert.equal(template.find((u) => u.startMin === 2 * 60)!.price, 700);
+    assert.equal(template.find((u) => u.startMin === 12 * 60)!.price, 600);
+    assert.equal(template.find((u) => u.startMin === 23 * 60)!.price, 700);
+  });
+
+  /**
+   * The small hours belong to the night before. With a Friday–Saturday weekend,
+   * 1 AM on Friday is Thursday night (weekday) and 1 AM on Sunday is Saturday
+   * night (weekend) — not whatever the calendar date says.
+   */
+  it("charges the small hours at the rate of the night they belong to", () => {
+    const config = {
+      slotMinutes: 60,
+      openMin: 0,
+      closeMin: 1440,
+      priceRules: splitOvernight(typed),
+      weekendPriceRules: splitOvernight([
+        { fromMin: 6 * 60, toMin: 18 * 60, price: 800 },
+        { fromMin: 18 * 60, toMin: 6 * 60, price: 900 },
+      ]),
+      weekendDays: [5, 6],
+    };
+    const at = (date: string, hour: number) => buildDayTemplate(config, date).find((u) => u.startMin === hour * 60)!.price;
+    // 2026-10-01 is a Thursday.
+    assert.equal(at("2026-10-01", 23), 700, "Thursday night");
+    assert.equal(at("2026-10-02", 1), 700, "Thursday night, after midnight");
+    assert.equal(at("2026-10-02", 6), 800, "Friday day");
+    assert.equal(at("2026-10-02", 23), 900, "Friday night");
+    assert.equal(at("2026-10-03", 1), 900, "Friday night, after midnight");
+    assert.equal(at("2026-10-04", 1), 900, "Saturday night, after midnight");
+    assert.equal(at("2026-10-04", 6), 600, "Sunday day is a weekday");
+    assert.equal(at("2026-10-05", 1), 700, "Sunday night, after midnight");
+  });
+
+  it("leaves halves alone when their prices differ or they make the whole day", () => {
+    const different = [
+      { fromMin: 18 * 60, toMin: 1440, price: 700 },
+      { fromMin: 0, toMin: 6 * 60, price: 800 },
+    ];
+    assert.deepEqual(joinOvernight(different), different);
+    const wholeDay = [
+      { fromMin: 6 * 60, toMin: 1440, price: 700 },
+      { fromMin: 0, toMin: 6 * 60, price: 700 },
+    ];
+    assert.deepEqual(joinOvernight(wholeDay), wholeDay);
   });
 });

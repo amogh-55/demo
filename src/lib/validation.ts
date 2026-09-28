@@ -413,22 +413,6 @@ export const facilityConfigSchema = z
     message: "Each ball type needs its own id",
     path: ["ballTypes"],
   })
-  /**
-   * Weekend prices that cover fewer hours than the weekday ones would make part
-   * of a Saturday unsellable — the slot simply vanishes from the grid, which
-   * reads as a bug rather than as a pricing decision.
-   */
-  .refine(
-    (c) =>
-      c.weekendPriceRules.length === 0 ||
-      c.priceRules.every((weekday) =>
-        c.weekendPriceRules.some((weekend) => weekend.fromMin <= weekday.fromMin && weekend.toMin >= weekday.toMin),
-      ),
-    {
-      message: "Weekend bands must cover the same hours as the weekday ones, or a weekend slot would be unsellable",
-      path: ["weekendPriceRules"],
-    },
-  )
   .refine((c) => c.weekendPriceRules.length === 0 || c.weekendDays.length > 0, {
     message: "Choose which days the weekend prices apply to",
     path: ["weekendDays"],
