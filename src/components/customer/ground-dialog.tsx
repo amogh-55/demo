@@ -69,7 +69,7 @@ export function GroundDialog({
           </div>
 
           {/* Scrolls on its own so the Continue button never leaves the screen. */}
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+          <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-5 py-4">
             {location.facilities.map((facility) => (
               <FacilityPricing key={facility.id} facility={facility} />
             ))}

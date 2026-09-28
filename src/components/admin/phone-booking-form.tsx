@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Check, ChevronDown, CircleCheck, IndianRupee, MapPin, User } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
 import { hoursTouched } from "@/lib/booking/schedule";
-import { formatBusinessDate, formatCompactRange, formatRange } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange } from "@/lib/time";
 import { Alert, Button, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
 export interface ManualBookingFacility {
@@ -32,6 +32,15 @@ interface DayResponse {
   dayBlock: { reason: string } | null;
   units: DayUnit[];
 }
+
+/** What a slot that cannot be picked is doing instead, in the owner's words. */
+const STATUS_LABEL: Record<string, string> = {
+  BOOKED: "Booked",
+  PENDING: "Awaiting payment",
+  HELD: "Being booked",
+  BLOCKED: "Blocked",
+  PAST: "Passed",
+};
 
 /** One numbered step of the form, so the owner can see where they are on a call. */
 function Step({
@@ -289,11 +298,40 @@ export function PhoneBookingForm({
     }
   }
 
-  /** One quarter-hour or one hour, as a button. */
+  /** How many overs fit from `startMin` before the next taken slot or closing time. */
+  const oversThatFitFrom = (startMin: number): number => {
+    let blocks = 0;
+    while (units.find((u) => u.startMin === startMin + blocks * slotMinutes)?.status === "AVAILABLE") blocks += 1;
+    return blocks * (facility?.oversPerSlot ?? 0);
+  };
+
+  /**
+   * One quarter-hour or one hour, as a button.
+   *
+   * Taken and too-short are drawn differently on purpose. Both used to be struck
+   * through, so a free 11:45 PM — refused only because 30 overs from there would
+   * run past midnight — looked exactly like somebody else's booking.
+   */
   const SlotButton = ({ unit }: { unit: DayUnit }) => {
     const free = unit.status === "AVAILABLE";
     const fits = !isOvers || Boolean(oversRunFrom(unit.startMin));
     const selected = selectedUnits.some((u) => u.startMin === unit.startMin);
+    // A bowling tile is a START time, so it quotes the session picked, not one block.
+    const label = selected
+      ? isOvers
+        ? unit.startMin === selectedUnits[0]?.startMin
+          ? `Starts · ${overs} overs`
+          : `In this booking`
+        : formatCurrency(unit.price)
+      : !free
+        ? STATUS_LABEL[unit.status] ?? "Taken"
+        : !fits
+          ? `Only ${oversThatFitFrom(unit.startMin)} overs fit`
+          : isOvers
+            ? `Till ${formatMinutes(unit.startMin + slotsNeeded * slotMinutes)}`
+            : unit.price > 0
+              ? formatCurrency(unit.price)
+              : null;
     return (
       <button
         type="button"
@@ -306,14 +344,14 @@ export function PhoneBookingForm({
             ? "border-pitch-600 bg-pitch-600 text-white shadow-sm"
             : free && fits
               ? "border-ink-200 bg-white text-ink-800 hover:border-pitch-500 hover:bg-pitch-50"
-              : "cursor-not-allowed border-ink-100 bg-ink-50 text-ink-400 line-through",
+              : free
+                ? "cursor-not-allowed border-dashed border-ink-200 bg-white text-ink-400"
+                : "cursor-not-allowed border-ink-100 bg-ink-50 text-ink-400",
         )}
       >
-        <span>{formatCompactRange(unit.startMin, unit.endMin)}</span>
-        {!isOvers && free && unit.price > 0 ? (
-          <span className={cn("text-[10px] font-medium", selected ? "text-white/80" : "text-ink-500")}>
-            {formatCurrency(unit.price)}
-          </span>
+        <span className={cn(!free && "line-through")}>{formatCompactRange(unit.startMin, unit.endMin)}</span>
+        {label ? (
+          <span className={cn("text-[10px] font-medium", selected ? "text-white/80" : "text-ink-500")}>{label}</span>
         ) : null}
       </button>
     );
@@ -439,7 +477,10 @@ export function PhoneBookingForm({
             <div className="max-h-[40dvh] space-y-1.5 overflow-y-auto pr-1 sm:max-h-[46dvh]">
               {hourGroups.map(({ hour, units: own }) => {
                 const openNow = expandedHours.has(hour);
-                const freeHere = own.filter(
+                const anyFree = own.some((u) => u.status === "AVAILABLE");
+                // Counted as places a session can START, and said so: "2 free" next
+                // to three free quarters read as a miscount.
+                const startsHere = own.filter(
                   (u) => u.status === "AVAILABLE" && (!isOvers || Boolean(oversRunFrom(u.startMin))),
                 ).length;
                 return (
@@ -448,15 +489,19 @@ export function PhoneBookingForm({
                       type="button"
                       onClick={() => setOpenHour(openNow ? null : hour)}
                       aria-expanded={openNow}
-                      disabled={freeHere === 0}
+                      disabled={!anyFree}
                       className={cn(
                         "flex h-12 w-full items-center justify-between gap-2 px-3 text-sm font-semibold",
-                        freeHere === 0 ? "cursor-not-allowed text-ink-400" : "text-ink-800 hover:bg-ink-50",
+                        !anyFree ? "cursor-not-allowed text-ink-400" : "text-ink-800 hover:bg-ink-50",
                       )}
                     >
                       <span>{formatCompactRange(hour, hour + 60)}</span>
                       <span className="flex items-center gap-2 text-xs font-medium text-ink-500">
-                        {freeHere === 0 ? "full" : `${freeHere} free`}
+                        {!anyFree
+                          ? "full"
+                          : startsHere === 0
+                            ? `Too short for ${overs} overs`
+                            : `${startsHere} start${startsHere === 1 ? "" : "s"} free`}
                         <ChevronDown
                           className={cn("h-4 w-4 transition-transform", openNow && "rotate-180")}
                           aria-hidden="true"
@@ -481,6 +526,13 @@ export function PhoneBookingForm({
               ))}
             </div>
           )}
+
+          {contiguous ? (
+            <p className="mt-2 text-sm font-semibold text-ink-900">
+              Chosen: {formatRange(selectedUnits[0]!.startMin, selectedUnits[selectedUnits.length - 1]!.endMin)}
+              {isOvers ? ` · ${overs} overs` : ""} · {formatCurrency(total)}
+            </p>
+          ) : null}
 
           {!isOvers && picked.length > 1 && !contiguous ? (
             <Alert tone="warning" className="mt-2">
@@ -598,7 +650,9 @@ export function PhoneBookingForm({
           </p>
           <p className="text-right">
             <span className="text-xs text-ink-500">Charged</span>{" "}
-            <span className="text-lg font-bold text-ink-900">{formatCurrency(total)}</span>
+            {/* An overs price exists before a start is picked; saying it next to
+                "Pick a time to see the price" contradicted itself. */}
+            <span className="text-lg font-bold text-ink-900">{contiguous ? formatCurrency(total) : "—"}</span>
           </p>
         </div>
 

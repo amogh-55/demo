@@ -9,7 +9,7 @@ import { freeRunLength, hoursTouched, runIsFree } from "@/lib/booking/schedule";
 import { facilityPhoto, locationCover } from "@/lib/photos";
 import { Msg91OtpWidget } from "./msg91-otp-widget";
 import { openRazorpayCheckout } from "./razorpay-checkout";
-import { formatBusinessDate, formatCompactRange, formatRange, minutesToDuration } from "@/lib/time";
+import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange, minutesToDuration } from "@/lib/time";
 import { Alert, Button, EmptyState, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 import type { FacilityKind, PublicSlotStatus } from "@/lib/types";
 
@@ -1432,9 +1432,16 @@ export function BookingFlow({
                                           {formatCompactRange(unit.startMin, unit.endMin)}
                                         </span>
                                         <span className={cn("block text-sm", inSelection ? "text-ink-950/70" : "text-ink-300")}>
-                                          {fits || inSelection
-                                            ? `${availability.oversPerSlot} overs · ${formatCurrency(ball?.pricePerSlot)}`
-                                            : free
+                                          {/* Each tile is a START time, so it quotes the whole session
+                                              the customer picked — "10 overs · ₹100" on every tile of a
+                                              40-over choice read as the limit being ignored. */}
+                                          {inSelection
+                                            ? unit.startMin === selection?.startMin
+                                              ? `Starts · ${overs} overs`
+                                              : `Your ${overs} overs`
+                                            : fits
+                                              ? `Till ${formatMinutes(runsTo)} · ${formatCurrency(sessionPrice)}`
+                                              : free
                                               // Free itself, but a later quarter it needs is not. Say how far
                                               // the machine is actually theirs from here.
                                               ? `Only ${oversThatFitAt(unit.startMin)} overs fit`

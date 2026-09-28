@@ -123,13 +123,23 @@
  * dropdown opens the phone's own picker and should leave the tabs alone.
  */
 @media (max-width: 1023px) {
+  /*
+   * It comes back a moment AFTER the field lets go, not at once. Back instantly,
+   * it landed under the finger that was tapping a button beside the field — the
+   * tap that closed the keyboard then went to the tab bar, so "Paid in full"
+   * pressed straight after typing an amount silently did nothing.
+   */
+  .admin-tabbar {
+    transition: visibility 0s linear 400ms;
+  }
   body:has(
       input:not([type="checkbox"], [type="radio"], [type="date"], [type="time"], [type="range"], [type="file"],
           [type="button"], [type="submit"], [type="color"]):focus,
       textarea:focus
     )
     .admin-tabbar {
-    display: none;
+    visibility: hidden;
+    transition: none;
   }
 }
 
