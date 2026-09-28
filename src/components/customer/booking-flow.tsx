@@ -1512,23 +1512,25 @@ export function BookingFlow({
               </>
             )}
 
+            {/* Pinned to the bottom of the screen the moment a slot is picked. Sat
+                under the grid it was a scroll away, and a customer who had tapped
+                a slot saw nothing happen and wondered why they could not book. */}
             {selection && readyToHold ? (
-              <div className="mt-6 rounded-lg border border-lime-400/30 bg-lime-400/10 p-4">
-                {/* Stacked on a phone so Continue is a full-width thumb target under the
-                    slot it confirms, rather than a small button pushed to one side. */}
-                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                  <div className="min-w-0">
+              <div className="fixed inset-x-0 bottom-0 z-30 border-t border-lime-400/30 bg-ink-900/95 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] pt-3 shadow-[0_-8px_24px_rgba(0,0,0,0.45)] backdrop-blur">
+                <div className="container flex max-w-3xl items-center gap-3">
+                  <div className="min-w-0 flex-1">
                     <p className="font-semibold text-white">{formatRange(selection.startMin, selection.endMin)}</p>
                     <p className="text-sm text-ink-400">
                       {isOvers && overs ? `${overs} overs · ` : ""}
                       {minutesToDuration(selection.endMin - selection.startMin)}
-                      {isOvers && ball ? ` · ${ball.name}` : ""} · {formatCurrency(selectedAmount)}
+                      {isOvers && ball ? ` · ${ball.name}` : ""} ·{" "}
+                      <span className="font-semibold text-lime-400">{formatCurrency(selectedAmount)}</span>
                       {isOvers && payAtVenue ? " · pay at the ground" : ""}
                     </p>
                   </div>
-                  <Button size="lg" className="w-full sm:w-auto" onClick={startHold} disabled={holding}>
+                  <Button size="lg" className="shrink-0" onClick={startHold} disabled={holding}>
                     {holding ? <Spinner /> : null}
-                    {holding ? "Holding your slot…" : "Continue"}
+                    {holding ? "Holding…" : "Continue"}
                   </Button>
                 </div>
               </div>
@@ -1539,6 +1541,9 @@ export function BookingFlow({
                 {error}
               </Alert>
             ) : null}
+
+            {/* Room for the pinned bar, so it never sits over the last row of slots. */}
+            {selection && readyToHold ? <div className="h-32" aria-hidden="true" /> : null}
           </section>
         </>
       ) : null}
