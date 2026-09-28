@@ -11,6 +11,7 @@ import {
   resolveUnits,
   freeRunLength,
   runIsFree,
+  sessionStartFor,
   slotsForOvers,
   totalPrice,
 } from "../src/lib/booking/schedule";
@@ -255,6 +256,48 @@ describe("how much of a session does fit at a start time", () => {
         runIsFree(15, afternoon, 825, slots),
         `${slots} slots`,
       );
+    }
+  });
+});
+
+/**
+ * The reported case: 11 PM to midnight with 11:15 booked. Every free quarter is
+ * tappable, and a tap gives a session that covers it without touching 11:15.
+ */
+describe("where a session starts from a tapped quarter", () => {
+  // 9 PM to midnight in quarters, 11:15 PM (1395) taken.
+  const lateEvening = new Set([1260, 1275, 1290, 1305, 1320, 1335, 1350, 1365, 1380, 1410, 1425]);
+
+  it("starts at the tapped quarter when the session fits from there", () => {
+    assert.deepEqual(sessionStartFor(15, lateEvening, 1410, 2), { startMin: 1410, room: 2 });
+  });
+
+  it("slides back to end at midnight when it would run past it", () => {
+    assert.equal(sessionStartFor(15, lateEvening, 1425, 2).startMin, 1410, "20 overs from 11:45 → 11:30");
+  });
+
+  it("slides back to end before the booking it would run into", () => {
+    assert.equal(sessionStartFor(15, lateEvening, 1380, 2).startMin, 1365, "20 overs from 11:00 → 10:45");
+    assert.equal(sessionStartFor(15, lateEvening, 1380, 6).startMin, 1305, "60 overs ending at 11:15");
+  });
+
+  it("refuses when the free stretch is shorter than the session", () => {
+    assert.deepEqual(sessionStartFor(15, lateEvening, 1425, 3), { startMin: null, room: 2 });
+    assert.deepEqual(sessionStartFor(15, lateEvening, 1260, 10), { startMin: null, room: 9 });
+  });
+
+  it("refuses a quarter that is itself taken", () => {
+    assert.deepEqual(sessionStartFor(15, lateEvening, 1395, 1), { startMin: null, room: 0 });
+  });
+
+  it("never covers a taken quarter, whatever is tapped", () => {
+    for (const tap of lateEvening) {
+      for (const slots of [1, 2, 3, 4, 5, 6]) {
+        const { startMin } = sessionStartFor(15, lateEvening, tap, slots);
+        if (startMin === null) continue;
+        assert.ok(startMin <= tap && tap < startMin + slots * 15, `${slots} from ${tap} covers the tap`);
+        assert.ok(runIsFree(15, lateEvening, startMin, slots), `${slots} from ${tap} is all free`);
+      }
     }
   });
 });

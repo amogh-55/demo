@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { Check, ChevronDown, CircleCheck, IndianRupee, MapPin, User } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
-import { hoursTouched } from "@/lib/booking/schedule";
+import { hoursTouched, sessionStartFor } from "@/lib/booking/schedule";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange } from "@/lib/time";
 import { Alert, Button, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
@@ -119,6 +119,8 @@ export function PhoneBookingForm({
   const [ballTypeId, setBallTypeId] = React.useState("");
   /** Which hour's quarter-hours are open. Whole hours are what people say on the phone. */
   const [openHour, setOpenHour] = React.useState<number | null>(null);
+  /** A free quarter tapped whose gap is too short for the overs chosen. */
+  const [tooShortAt, setTooShortAt] = React.useState<number | null>(null);
 
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
@@ -146,6 +148,7 @@ export function PhoneBookingForm({
   React.useEffect(() => {
     setPicked([]);
     setOpenHour(null);
+    setTooShortAt(null);
   }, [resourceId, date, overs]);
 
   const loadDay = React.useCallback(async () => {
@@ -169,6 +172,7 @@ export function PhoneBookingForm({
   function reset() {
     setPicked([]);
     setOpenHour(null);
+    setTooShortAt(null);
     setName("");
     setPhone("");
     setCollected("0");
@@ -195,6 +199,13 @@ export function PhoneBookingForm({
     },
     [units, slotsNeeded, slotMinutes],
   );
+
+  const freeStarts = React.useMemo(
+    () => new Set(units.filter((u) => u.status === "AVAILABLE").map((u) => u.startMin)),
+    [units],
+  );
+  /** Where a tapped free quarter's session goes — from there, or slid back to still cover it. */
+  const startFor = (tapMin: number) => sessionStartFor(slotMinutes, freeStarts, tapMin, slotsNeeded);
 
   const selectedUnits = React.useMemo(() => {
     if (isOvers) return picked.length === 1 ? (oversRunFrom(picked[0]!) ?? []) : [];
@@ -250,7 +261,16 @@ export function PhoneBookingForm({
    * again from the hour tapped, and tapping a lone chosen hour clears it.
    */
   function pickUnit(startMin: number) {
-    if (isOvers) return setPicked([startMin]);
+    if (isOvers) {
+      // Tapping the session again clears it, like the customer's page.
+      if (selectedUnits.some((u) => u.startMin === startMin)) {
+        setTooShortAt(null);
+        return setPicked([]);
+      }
+      const start = startFor(startMin).startMin;
+      setTooShortAt(start === null ? startMin : null);
+      return setPicked(start === null ? [] : [start]);
+    }
     setPicked((current) => {
       if (current.length === 0) return [startMin];
       const first = Math.min(...current);
@@ -298,25 +318,18 @@ export function PhoneBookingForm({
     }
   }
 
-  /** How many overs fit from `startMin` before the next taken slot or closing time. */
-  const oversThatFitFrom = (startMin: number): number => {
-    let blocks = 0;
-    while (units.find((u) => u.startMin === startMin + blocks * slotMinutes)?.status === "AVAILABLE") blocks += 1;
-    return blocks * (facility?.oversPerSlot ?? 0);
-  };
-
   /**
    * One quarter-hour or one hour, as a button.
    *
-   * Taken and too-short are drawn differently on purpose. Both used to be struck
-   * through, so a free 11:45 PM — refused only because 30 overs from there would
-   * run past midnight — looked exactly like somebody else's booking.
+   * Free is drawn free whatever the overs. A free 11:45 PM used to grey out when
+   * 20 overs from there would run past midnight, and read as somebody's booking;
+   * now tapping it slides the session back to 11:30 so it still fits.
    */
   const SlotButton = ({ unit }: { unit: DayUnit }) => {
     const free = unit.status === "AVAILABLE";
-    const fits = !isOvers || Boolean(oversRunFrom(unit.startMin));
     const selected = selectedUnits.some((u) => u.startMin === unit.startMin);
-    // A bowling tile is a START time, so it quotes the session picked, not one block.
+    const { startMin: sessionStart, room } = isOvers && free ? startFor(unit.startMin) : { startMin: null, room: 0 };
+    // A bowling tile quotes the session it would give, not one block.
     const label = selected
       ? isOvers
         ? unit.startMin === selectedUnits[0]?.startMin
@@ -325,28 +338,28 @@ export function PhoneBookingForm({
         : formatCurrency(unit.price)
       : !free
         ? STATUS_LABEL[unit.status] ?? "Taken"
-        : !fits
-          ? `Only ${oversThatFitFrom(unit.startMin)} overs fit`
-          : isOvers
-            ? `Till ${formatMinutes(unit.startMin + slotsNeeded * slotMinutes)}`
-            : unit.price > 0
-              ? formatCurrency(unit.price)
-              : null;
+        : !isOvers
+          ? unit.price > 0
+            ? formatCurrency(unit.price)
+            : null
+          : sessionStart === null
+            ? `Only ${room * (facility?.oversPerSlot ?? 0)} overs fit`
+            : sessionStart === unit.startMin
+              ? `Till ${formatMinutes(sessionStart + slotsNeeded * slotMinutes)}`
+              : `From ${formatMinutes(sessionStart)}`;
     return (
       <button
         type="button"
-        disabled={!free || !fits}
+        disabled={!free}
         title={unit.booking ? `${unit.booking.customerName} · ${unit.booking.reference}` : undefined}
         onClick={() => pickUnit(unit.startMin)}
         className={cn(
           "flex h-12 flex-col items-center justify-center rounded-lg border px-1 text-xs font-semibold transition-colors",
           selected
             ? "border-pitch-600 bg-pitch-600 text-white shadow-sm"
-            : free && fits
+            : free
               ? "border-ink-200 bg-white text-ink-800 hover:border-pitch-500 hover:bg-pitch-50"
-              : free
-                ? "cursor-not-allowed border-dashed border-ink-200 bg-white text-ink-400"
-                : "cursor-not-allowed border-ink-100 bg-ink-50 text-ink-400",
+              : "cursor-not-allowed border-ink-100 bg-ink-50 text-ink-400",
         )}
       >
         <span className={cn(!free && "line-through")}>{formatCompactRange(unit.startMin, unit.endMin)}</span>
@@ -477,12 +490,9 @@ export function PhoneBookingForm({
             <div className="max-h-[40dvh] space-y-1.5 overflow-y-auto pr-1 sm:max-h-[46dvh]">
               {hourGroups.map(({ hour, units: own }) => {
                 const openNow = expandedHours.has(hour);
-                const anyFree = own.some((u) => u.status === "AVAILABLE");
-                // Counted as places a session can START, and said so: "2 free" next
-                // to three free quarters read as a miscount.
-                const startsHere = own.filter(
-                  (u) => u.status === "AVAILABLE" && (!isOvers || Boolean(oversRunFrom(u.startMin))),
-                ).length;
+                // Free quarters, the same count whatever the overs chosen.
+                const freeCount = own.filter((u) => u.status === "AVAILABLE").length;
+                const anyFree = freeCount > 0;
                 return (
                   <div key={hour} className="overflow-hidden rounded-lg border border-ink-200 bg-white">
                     <button
@@ -497,11 +507,7 @@ export function PhoneBookingForm({
                     >
                       <span>{formatCompactRange(hour, hour + 60)}</span>
                       <span className="flex items-center gap-2 text-xs font-medium text-ink-500">
-                        {!anyFree
-                          ? "full"
-                          : startsHere === 0
-                            ? `Too short for ${overs} overs`
-                            : `${startsHere} start${startsHere === 1 ? "" : "s"} free`}
+                        {!anyFree ? "full" : `${freeCount} slot${freeCount === 1 ? "" : "s"} free`}
                         <ChevronDown
                           className={cn("h-4 w-4 transition-transform", openNow && "rotate-180")}
                           aria-hidden="true"
@@ -514,6 +520,12 @@ export function PhoneBookingForm({
                           <SlotButton key={unit.startMin} unit={unit} />
                         ))}
                       </div>
+                    ) : null}
+                    {openNow && tooShortAt !== null && own.some((u) => u.startMin === tooShortAt) ? (
+                      <Alert tone="warning" className="mx-2 mb-2">
+                        Only {startFor(tooShortAt).room * (facility?.oversPerSlot ?? 0)} overs fit around{" "}
+                        {formatMinutes(tooShortAt)}. Choose fewer overs or another time.
+                      </Alert>
                     ) : null}
                   </div>
                 );

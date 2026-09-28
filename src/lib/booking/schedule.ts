@@ -162,6 +162,30 @@ export function freeRunLength(
 }
 
 /**
+ * Where a session of `slots` units starts when the free unit at `tapMin` is
+ * tapped: there, if the session fits; otherwise as late as it can while still
+ * covering that unit — a free 11:45 PM tapped for 20 overs gives 11:30 PM to
+ * midnight. A free unit therefore always reads as free, whatever the overs.
+ *
+ * `room` is the whole free stretch the unit sits in, counted in units; `startMin`
+ * is null when that stretch is shorter than the session.
+ */
+export function sessionStartFor(
+  slotMinutes: number,
+  freeStarts: ReadonlySet<number>,
+  tapMin: number,
+  slots: number,
+): { startMin: number | null; room: number } {
+  if (!freeStarts.has(tapMin)) return { startMin: null, room: 0 };
+  let from = tapMin;
+  while (freeStarts.has(from - slotMinutes)) from -= slotMinutes;
+  let to = tapMin;
+  while (freeStarts.has(to)) to += slotMinutes;
+  const room = (to - from) / slotMinutes;
+  return { startMin: room >= slots ? Math.min(tapMin, to - slots * slotMinutes) : null, room };
+}
+
+/**
  * The overs options worth offering as quick picks, up to what the day can hold.
  *
  * Generated rather than configured: the rule is one number, so a ladder stored

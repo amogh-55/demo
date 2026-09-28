@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, ChevronDown, Clock, Copy, CreditCard, ImageUp, MapPin, Navigation, ShieldCheck, Trash2 } from "lucide-react";
 import { ApiError, api, errorMessage } from "@/lib/client";
-import { freeRunLength, hoursTouched, runIsFree } from "@/lib/booking/schedule";
+import { hoursTouched, runIsFree, sessionStartFor } from "@/lib/booking/schedule";
 import { facilityPhoto, locationCover } from "@/lib/photos";
 import { Msg91OtpWidget } from "./msg91-otp-widget";
 import { openRazorpayCheckout } from "./razorpay-checkout";
@@ -573,17 +573,20 @@ export function BookingFlow({
   );
 
   /**
-   * What the customer could have from a start that cannot hold their session —
-   * the clash is usually a booking three quarters away, which they cannot see
-   * from the button they pressed.
+   * Where the session goes when a free slot is tapped — from that slot, or slid
+   * back so it still covers it — and how much room that free stretch has. A free
+   * slot is shown free whatever the overs; it used to grey out when the session
+   * would run into midnight or the next booking, and read as taken.
    */
-  const oversThatFitAt = React.useCallback(
-    (startMin: number) =>
+  const startFor = React.useCallback(
+    (tapMin: number) =>
       availability && sessionSlots > 0
-        ? freeRunLength(availability.slotMinutes, freeStarts, startMin, sessionSlots) * availability.oversPerSlot
-        : 0,
+        ? sessionStartFor(availability.slotMinutes, freeStarts, tapMin, sessionSlots)
+        : { startMin: null, room: 0 },
     [availability, freeStarts, sessionSlots],
   );
+  /** A free slot tapped whose stretch is too short for the overs chosen. */
+  const [tooShortAt, setTooShortAt] = React.useState<number | null>(null);
 
   const anyStartFits = React.useMemo(
     () => units.some((u) => u.status === "AVAILABLE" && fitsAt(u.startMin)),
@@ -614,6 +617,7 @@ export function BookingFlow({
   const [openHour, setOpenHour] = React.useState<number | "auto" | "none">("auto");
   React.useEffect(() => {
     setOpenHour("auto");
+    setTooShortAt(null);
   }, [resourceId, date, overs]);
 
   const activeHour = openHour === "auto" ? firstFittingHour : openHour === "none" ? null : openHour;
@@ -1344,12 +1348,13 @@ export function BookingFlow({
                     that 7:00 is already taken is how a customer decides what to
                     do instead. Each button is ONE block and shows only its own
                     clock time — printing the whole session on every button made
-                    neighbouring buttons read as overlapping bookings. Picking one
-                    lights up the run of blocks the chosen overs need. */}
+                    neighbouring buttons read as overlapping bookings. Free is
+                    white whatever the overs; tapping one lights up the run of
+                    blocks the chosen overs need around it. */}
                 <div className="mt-5">
                   <p className="field-label">Pick a start time</p>
                   <p className="mt-0.5 text-sm text-ink-400">
-                    Pick the hour, then the exact start. Each slot is {availability.oversPerSlot} overs (
+                    Pick the hour, then a free slot. Each slot is {availability.oversPerSlot} overs (
                     {minutesToDuration(availability.slotMinutes)})
                     {sessionSlots > 1 ? `, and ${overs} overs runs on for ${minutesToDuration(sessionMinutes)}` : ""}.
                   </p>
@@ -1363,7 +1368,9 @@ export function BookingFlow({
                     <div className="mt-3 space-y-2">
                       {hourGroups.map((group) => {
                         const expanded = expandedHours.has(group.hourMin);
-                        const freeStartCount = group.units.filter((u) => u.status === "AVAILABLE" && fitsAt(u.startMin)).length;
+                        // Free slots, the same count whatever the overs: "3 free" at 10
+                        // overs and "1 free" at 20 read as the grid changing its mind.
+                        const freeCount = group.units.filter((u) => u.status === "AVAILABLE").length;
                         const holdsSelection = selection
                           ? group.units.some((u) => u.startMin >= selection.startMin && u.startMin < selection.endMin)
                           : false;
@@ -1383,12 +1390,8 @@ export function BookingFlow({
                             >
                               <span className="text-base font-semibold text-white">{formatCompactRange(group.hourMin, group.hourMin + 60)}</span>
                               <span className="flex items-center gap-2 text-sm">
-                                <span className={freeStartCount > 0 ? "text-ink-300" : "text-ink-500"}>
-                                  {freeStartCount > 0
-                                    ? `${freeStartCount} start${freeStartCount === 1 ? "" : "s"} free`
-                                    : group.units.some((u) => u.status === "AVAILABLE")
-                                      ? `Too short for ${overs} overs`
-                                      : "Nothing free"}
+                                <span className={freeCount > 0 ? "text-ink-300" : "text-ink-500"}>
+                                  {freeCount > 0 ? `${freeCount} slot${freeCount === 1 ? "" : "s"} free` : "Nothing free"}
                                 </span>
                                 <ChevronDown
                                   className={cn("h-4 w-4 shrink-0 text-ink-400 transition-transform", expanded ? "rotate-180" : "")}
@@ -1403,27 +1406,28 @@ export function BookingFlow({
                                   const inSelection =
                                     selection && unit.startMin >= selection.startMin && unit.startMin < selection.endMin;
                                   const free = unit.status === "AVAILABLE";
-                                  const fits = free && fitsAt(unit.startMin);
-                                  const runsTo = unit.startMin + sessionMinutes;
+                                  const { startMin: sessionStart, room } = startFor(unit.startMin);
                                   return (
                                     <li key={unit.startMin}>
                                       <button
                                         type="button"
-                                        disabled={!fits && !inSelection}
+                                        disabled={!free}
                                         aria-pressed={Boolean(inSelection)}
                                         onClick={() => {
-                                          const next =
-                                            inSelection || sessionMinutes <= 0
-                                              ? null
-                                              : { startMin: unit.startMin, endMin: runsTo };
-                                          setSelection(next);
-                                          if (next) setOpenHour(group.hourMin);
+                                          if (inSelection || sessionStart === null) {
+                                            setSelection(null);
+                                            setTooShortAt(inSelection ? null : unit.startMin);
+                                            return;
+                                          }
+                                          setTooShortAt(null);
+                                          setSelection({ startMin: sessionStart, endMin: sessionStart + sessionMinutes });
+                                          setOpenHour(group.hourMin);
                                         }}
                                         className={cn(
                                           "w-full rounded-lg border px-3 py-3 text-left transition-colors",
                                           inSelection
                                             ? "border-lime-400 bg-lime-400 text-ink-950"
-                                            : fits
+                                            : free
                                               ? "border-white/15 bg-white/[0.06] text-white hover:border-lime-400/60 hover:bg-white/10"
                                               : "cursor-not-allowed border-white/5 bg-white/[0.02] text-ink-500",
                                         )}
@@ -1439,19 +1443,27 @@ export function BookingFlow({
                                             ? unit.startMin === selection?.startMin
                                               ? `Starts · ${overs} overs`
                                               : `Your ${overs} overs`
-                                            : fits
-                                              ? `Till ${formatMinutes(runsTo)} · ${formatCurrency(sessionPrice)}`
-                                              : free
-                                              // Free itself, but a later quarter it needs is not. Say how far
-                                              // the machine is actually theirs from here.
-                                              ? `Only ${oversThatFitAt(unit.startMin)} overs fit`
-                                              : statusLabel(unit.status)}
+                                            : !free
+                                              ? statusLabel(unit.status)
+                                              : sessionStart === null
+                                                // Free, but the gap it sits in is shorter than
+                                                // the session. Say how much the gap does hold.
+                                                ? `Only ${room * availability.oversPerSlot} overs fit`
+                                                : sessionStart === unit.startMin
+                                                  ? `Till ${formatMinutes(sessionStart + sessionMinutes)} · ${formatCurrency(sessionPrice)}`
+                                                  : `From ${formatMinutes(sessionStart)} · ${formatCurrency(sessionPrice)}`}
                                         </span>
                                       </button>
                                     </li>
                                   );
                                 })}
                               </ul>
+                            ) : null}
+                            {expanded && tooShortAt !== null && group.units.some((u) => u.startMin === tooShortAt) ? (
+                              <Alert tone="warning" className="mx-3 mb-3">
+                                Only {startFor(tooShortAt).room * availability.oversPerSlot} overs fit around{" "}
+                                {formatMinutes(tooShortAt)}. Choose fewer overs or another time.
+                              </Alert>
                             ) : null}
                           </div>
                         );
