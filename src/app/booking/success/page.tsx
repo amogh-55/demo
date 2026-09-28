@@ -39,7 +39,7 @@ export default async function BookingSuccessPage() {
             <h1 className="text-xl font-bold text-white">We could not find your booking on this device</h1>
             <p className="mt-2 text-sm text-ink-400">
               If you just submitted a request, keep the booking reference you were shown. The turf team will still
-              contact you on WhatsApp once your payment is verified.
+              contact you once your payment is verified.
             </p>
             <Link href="/" className="mt-5 inline-block">
               <Button variant="secondary">Back to home</Button>
@@ -221,7 +221,7 @@ export default async function BookingSuccessPage() {
                   <strong>1.</strong> We check your payment screenshot against the amount above.
                 </li>
                 <li>
-                  <strong>2.</strong> Once the payment is verified, we message you on WhatsApp to confirm your slot.
+                  <strong>2.</strong> Once the payment is verified, your slot is confirmed.
                 </li>
                 {balanceAtGround > 0 ? (
                   <li>
@@ -232,7 +232,7 @@ export default async function BookingSuccessPage() {
               </ol>
               <p className="mt-3 border-t border-amber-200 pt-2 text-amber-100">
                 Your slot is held for you while we check. <strong>This is not a confirmation yet</strong> — it becomes
-                confirmed only after we verify the payment and message you.
+                confirmed only after we verify the payment.
               </p>
             </div>
           )}

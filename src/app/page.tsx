@@ -11,9 +11,8 @@ import {
   Navigation,
   Phone,
   Play,
-  QrCode,
+  CreditCard,
   ShieldCheck,
-  ShowerHead,
   Sparkles,
   Trophy,
 } from "lucide-react";
@@ -43,7 +42,6 @@ const FACILITIES = [
   { icon: Lightbulb, title: "Floodlights", body: "LED masts with no shadows on the crease. Play as late as you like." },
   { icon: Trophy, title: "Match-grade turf", body: "Artificial grass on a shock-pad base, swept and checked daily." },
   { icon: Car, title: "Free parking", body: "Covered slots for cars and bikes right beside the gate." },
-  { icon: ShowerHead, title: "Changing rooms", body: "Lockers, benches and clean washrooms on site." },
   { icon: Droplets, title: "Drinking water", body: "Filtered coolers beside every dugout, refilled through the day." },
   { icon: Dumbbell, title: "Gear on request", body: "Bats, balls, pads and gloves if you turn up empty-handed." },
 ];
@@ -51,8 +49,8 @@ const FACILITIES = [
 const STEPS = [
   { icon: MapPin, title: "Pick your ground", body: "Choose the turf nearest you." },
   { icon: CalendarDays, title: "Choose date & time", body: "Live availability, by the hour." },
-  { icon: QrCode, title: "Pay by UPI", body: "Scan, pay, upload the screenshot." },
-  { icon: ShieldCheck, title: "Get confirmed", body: "We verify and confirm on WhatsApp." },
+  { icon: CreditCard, title: "Pay online", body: "Secure payment by UPI, card or netbanking." },
+  { icon: ShieldCheck, title: "Get confirmed", body: "Your booking is confirmed as soon as you pay." },
 ];
 
 export default async function HomePage() {
@@ -126,7 +124,7 @@ export default async function HomePage() {
 
             <p className="mt-6 max-w-xl text-base leading-relaxed text-ink-300 animate-fade-up sm:text-lg">
               Box cricket, nets, bowling machines and pickleball courts — booked online in a minute. Live availability,
-              UPI payment and a WhatsApp confirmation, with no account, no app and no phone tag.
+              secure online payment and instant confirmation, with no account, no app and no phone tag.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 animate-fade-up sm:flex-row">

@@ -33,12 +33,12 @@ export async function generateMetadata(): Promise<Metadata> {
       template: `%s · ${businessName}`,
     },
     description:
-      "Book floodlit cricket turfs by the hour across three locations. Pick your ground, choose a slot, pay by UPI and get confirmed on WhatsApp.",
+      "Book floodlit cricket turfs by the hour across three locations. Pick your ground, choose a slot, pay online and get confirmed instantly.",
     openGraph: {
       type: "website",
       siteName: businessName,
       title: `${businessName} — Book a cricket turf near you`,
-      description: "Three floodlit grounds. Hourly slots. Instant UPI payment and WhatsApp confirmation.",
+      description: "Three floodlit grounds. Hourly slots. Secure online payment and instant confirmation.",
       url: appUrl,
       images: [{ url: "/images/hero-turf-action.jpg", width: 1200, height: 630, alt: `${businessName} cricket turf` }],
     },

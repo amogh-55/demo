@@ -78,6 +78,12 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
               {l.label}
             </a>
           ))}
+          <Link
+            href="/admin"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-ink-300 transition-colors hover:bg-white/5 hover:text-white"
+          >
+            Staff login
+          </Link>
         </nav>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -128,6 +134,13 @@ export function SiteHeader({ businessName, supportPhone }: { businessName: strin
                 {l.label}
               </a>
             ))}
+            <Link
+              href="/admin"
+              onClick={() => setOpen(false)}
+              className="rounded-lg px-3 py-3 text-sm font-medium text-ink-200 hover:bg-white/5"
+            >
+              Staff login
+            </Link>
           </div>
         </nav>
       ) : null}

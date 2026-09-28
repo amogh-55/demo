@@ -45,7 +45,7 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
 
       <main id="main" className="container max-w-3xl py-6 sm:py-10">
         <h1 className="text-3xl font-extrabold uppercase tracking-tight text-white sm:text-4xl">Book your slot</h1>
-        <p className="mt-2 text-ink-400">No account needed. Pick a slot, pay by UPI and we will confirm on WhatsApp.</p>
+        <p className="mt-2 text-ink-400">No account needed. Pick a slot, pay online and your booking is confirmed.</p>
 
         <div className="mt-6">
           <BookingFlow
