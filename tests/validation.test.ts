@@ -576,25 +576,6 @@ describe("every open hour must carry a price", () => {
     assert.equal(result.success, false, "8 PM to 10 PM has no weekend price");
   });
 
-  /** Weekend bands may be cut at different times from the weekday ones, as long as every hour is priced. */
-  it("accepts weekend bands split differently from the weekday ones", () => {
-    const result = facilityConfigSchema.safeParse({
-      ...base,
-      openMin: 0,
-      closeMin: 24 * 60,
-      priceRules: [
-        { fromMin: 6 * 60, toMin: 18 * 60, price: 600 },
-        { fromMin: 18 * 60, toMin: 24 * 60, price: 700 },
-        { fromMin: 0, toMin: 6 * 60, price: 700 },
-      ],
-      weekendPriceRules: [
-        { fromMin: 0, toMin: 12 * 60, price: 800 },
-        { fromMin: 12 * 60, toMin: 24 * 60, price: 900 },
-      ],
-    });
-    assert.equal(result.success, true, result.success ? "" : result.error.message);
-  });
-
   /** A price that never arrived. JSON has no NaN, so an empty box reaches here as null. */
   it("refuses a band with no price at all", () => {
     for (const price of [null, undefined, "", Number.NaN]) {

@@ -1,4 +1,3 @@
-import { joinOvernight } from "@/lib/booking/schedule";
 import { formatCompactRange } from "@/lib/time";
 import { formatCurrency } from "@/components/ui/primitives";
 import type { PublicLocationTree } from "@/lib/catalog";
@@ -29,7 +28,7 @@ function describeDays(days: number[]): string {
 function BandList({ bands }: { bands: Facility["priceBands"] }) {
   return (
     <dl className="space-y-1.5 text-sm">
-      {joinOvernight(bands).map((band) => (
+      {bands.map((band) => (
         <div key={band.fromMin} className="flex items-baseline justify-between gap-3">
           <dt className="text-ink-400">{formatCompactRange(band.fromMin, band.toMin)}</dt>
           <dd className="font-semibold text-lime-400">

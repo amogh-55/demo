@@ -21,7 +21,7 @@ import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
 import { getPublicCatalog } from "@/lib/catalog";
 import { locationCover } from "@/lib/photos";
 import { getSettings } from "@/lib/settings";
-import { MINUTES_IN_DAY, formatMinutes } from "@/lib/time";
+import { formatMinutes } from "@/lib/time";
 import { Button, formatCurrency } from "@/components/ui/primitives";
 import { GroundDialog } from "@/components/customer/ground-dialog";
 import { GroundsShowcase } from "@/components/customer/grounds-showcase";
@@ -68,7 +68,6 @@ export default async function HomePage() {
   const maxPrice = prices.length ? Math.max(...prices) : DEFAULT_HOURLY_CONFIG.priceRules.at(-1)!.price;
   const openMin = facilities.length ? Math.min(...facilities.map((f) => f.openMin)) : DEFAULT_HOURLY_CONFIG.openMin;
   const closeMin = facilities.length ? Math.max(...facilities.map((f) => f.closeMin)) : DEFAULT_HOURLY_CONFIG.closeMin;
-  const openAllDay = closeMin - openMin >= MINUTES_IN_DAY;
   const holdMinutes = DEFAULT_HOURLY_CONFIG.holdMinutes;
   const bookingWindowDays = facilities.length
     ? Math.max(...facilities.map((f) => f.bookingWindowDays))
@@ -80,12 +79,7 @@ export default async function HomePage() {
 
   const stats = [
     { value: String(locations.length), label: locations.length === 1 ? "Ground" : "Grounds" },
-    {
-      value: openAllDay
-        ? "24 hours"
-        : `${formatMinutes(openMin).replace(":00", "")}–${formatMinutes(closeMin).replace(":00", "")}`,
-      label: "Open daily",
-    },
+    { value: `${formatMinutes(openMin).replace(":00", "")}–${formatMinutes(closeMin).replace(":00", "")}`, label: "Open daily" },
     { value: `From ${formatCurrency(minPrice)}`, label: "Starting price" },
     { value: `${holdMinutes} min`, label: "Slot held while you pay" },
   ];
@@ -376,7 +370,7 @@ export default async function HomePage() {
               <div className="absolute inset-x-0 bottom-0 p-6">
                 <p className="text-sm text-ink-300">Open daily</p>
                 <p className="text-2xl font-bold text-white">
-                  {openAllDay ? "24 hours" : `${formatMinutes(openMin)} – ${formatMinutes(closeMin)}`}
+                  {formatMinutes(openMin)} – {formatMinutes(closeMin)}
                 </p>
                 <p className="mt-1 text-sm text-ink-400">
                   {formatCurrency(minPrice)}–{formatCurrency(maxPrice)} per hour · book up to {bookingWindowDays} days ahead
