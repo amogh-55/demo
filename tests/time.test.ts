@@ -89,4 +89,9 @@ describe("formatCompactRange", () => {
   it("renders midnight as 12, never 0", () => {
     assert.equal(formatCompactRange(0, 60), "12 – 1 AM");
   });
+
+  it("says 24 hours for a ground open round the clock", () => {
+    assert.equal(formatCompactRange(0, 24 * 60), "24 hours");
+    assert.equal(formatCompactRange(0, 23 * 60), "12 AM – 11 PM", "a day short of 24 hours is still a range");
+  });
 });

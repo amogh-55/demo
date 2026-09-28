@@ -48,11 +48,26 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   try {
     const admin = await requireAdmin();
     const id = parseId((await params).id);
-    const submitted = facilityConfigSchema.parse(await readJson(request));
+    const body = await readJson(request);
 
     const db = await getDb();
     const facility = await collections.facilities(db).findOne({ _id: id });
     if (!facility) throw appError("NOT_FOUND", "That facility does not exist.");
+
+    // The price of an overs session comes from its ball, so its bands exist only
+    // to mark the hours as sellable. They are laid over the submitted hours BEFORE
+    // validation: checked first, the old hidden band (say 6 AM–11 PM) failed the
+    // coverage rule the moment the owner widened the hours, and they cannot even
+    // see that band to fix it.
+    const submitted = facilityConfigSchema.parse(
+      facility.kind === "OVERS" && body && typeof body === "object"
+        ? {
+            ...body,
+            priceRules: [{ fromMin: (body as { openMin?: unknown }).openMin, toMin: (body as { closeMin?: unknown }).closeMin, price: 0 }],
+            weekendPriceRules: [],
+          }
+        : body,
+    );
 
     // Slot length is the unit the double-booking index is built on. Changing it
     // under live rows would split or merge the very documents that guarantee one
@@ -76,13 +91,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     if (facility.kind === "OVERS") {
       if (submitted.ballTypes.length === 0) throw appError("VALIDATION", "Add at least one ball type and its price.");
       if (submitted.oversPerSlot <= 0) throw appError("VALIDATION", "Say how many overs one slot covers.");
-      config = {
-        ...submitted,
-        // The price of an overs session comes from its ball, so the bands exist
-        // only to mark the hours as sellable. Written here so an admin can never
-        // leave a gap that silently makes part of the day unbookable.
-        priceRules: [{ fromMin: submitted.openMin, toMin: submitted.closeMin, price: 0 }],
-      };
+      config = submitted;
     } else {
       config = { ...submitted, oversPerSlot: 0, payAtVenueMaxOvers: 0, ballTypes: [] };
     }
