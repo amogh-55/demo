@@ -1424,7 +1424,7 @@ export function BookingFlow({
                                           setOpenHour(group.hourMin);
                                         }}
                                         className={cn(
-                                          "w-full rounded-lg border px-3 py-3 text-left transition-colors",
+                                          "h-full w-full rounded-lg border px-3 py-3 text-left transition-colors",
                                           inSelection
                                             ? "border-lime-400 bg-lime-400 text-ink-950"
                                             : free
@@ -1435,24 +1435,22 @@ export function BookingFlow({
                                         <span className="block whitespace-nowrap text-[15px] font-semibold">
                                           {formatCompactRange(unit.startMin, unit.endMin)}
                                         </span>
-                                        <span className={cn("block text-sm", inSelection ? "text-ink-950/70" : "text-ink-300")}>
-                                          {/* Each tile is a START time, so it quotes the whole session
-                                              the customer picked — "10 overs · ₹100" on every tile of a
-                                              40-over choice read as the limit being ignored. */}
-                                          {inSelection
-                                            ? unit.startMin === selection?.startMin
-                                              ? `Starts · ${overs} overs`
-                                              : `Your ${overs} overs`
-                                            : !free
-                                              ? statusLabel(unit.status)
-                                              : sessionStart === null
+                                        {/* A free slot the session fits around says nothing more:
+                                            "Till 10:45 PM" under 10–10:15 PM read as a mistake to
+                                            customers. The lit run and the summary show the times. */}
+                                        {inSelection || !free || sessionStart === null ? (
+                                          <span className={cn("block text-sm", inSelection ? "text-ink-950/70" : "text-ink-300")}>
+                                            {inSelection
+                                              ? unit.startMin === selection?.startMin
+                                                ? `Starts · ${overs} overs`
+                                                : `Your ${overs} overs`
+                                              : !free
+                                                ? statusLabel(unit.status)
                                                 // Free, but the gap it sits in is shorter than
                                                 // the session. Say how much the gap does hold.
-                                                ? `Only ${room * availability.oversPerSlot} overs fit`
-                                                : sessionStart === unit.startMin
-                                                  ? `Till ${formatMinutes(sessionStart + sessionMinutes)} · ${formatCurrency(sessionPrice)}`
-                                                  : `From ${formatMinutes(sessionStart)} · ${formatCurrency(sessionPrice)}`}
-                                        </span>
+                                                : `Only ${room * availability.oversPerSlot} overs fit`}
+                                          </span>
+                                        ) : null}
                                       </button>
                                     </li>
                                   );
