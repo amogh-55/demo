@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
-import { ObjectId, type ClientSession, type Db } from "mongodb";
+import { ObjectId, type ClientSession, type Db, type Filter } from "mongodb";
 import { collections, getDb, getMongoClient, isDuplicateKeyError } from "@/lib/db";
 import { appError, AppError } from "@/lib/errors";
 import { log } from "@/lib/log";
@@ -1128,7 +1128,10 @@ export async function submitBooking(input: SubmitBookingInput): Promise<BookingD
       // slow connection). One transaction claimed the units; this one found
       // nothing left to claim. Hand back the booking that did get created rather
       // than telling the customer their hold expired.
-      const raced = await collections.bookings(db).findOne({ holdTokenHash });
+      // Resource and date are the hold's own, so they narrow nothing a booking
+      // from it could have — they only let the index find it without reading
+      // every booking ever taken, which this failure path otherwise did.
+      const raced = await collections.bookings(db).findOne({ holdTokenHash, resourceId, date });
       if (raced) return raced;
 
       rethrowBookingError(err, "booking_submit", { resourceId: resourceId.toHexString(), date, startMin, endMin });
@@ -2142,6 +2145,20 @@ export async function resolveBlockTargets(input: {
 export const SCREENSHOT_RETAIN_DAYS = 7;
 
 /**
+ * A booking still holding at least one screenshot file, on the booking or on any
+ * payment attempt.
+ *
+ * `$type` rather than `$ne: null`, which is wrong both ways on an array: it
+ * matched every booking with no payments at all — each one rewritten by the
+ * nightly purge, for ever — and missed one whose attempts mix a file with none.
+ * Partial indexes in db.ts hold exactly these bookings, about a week's worth, so
+ * neither cleanup job reads the rest of the history.
+ */
+const HOLDS_SCREENSHOT: Filter<BookingDoc> = {
+  $or: [{ paymentScreenshotKey: { $type: "string" } }, { "payments.screenshotKey": { $type: "string" } }],
+};
+
+/**
  * Deletes screenshots for bookings played more than {@link SCREENSHOT_RETAIN_DAYS}
  * ago, keeping every payment record intact.
  *
@@ -2189,9 +2206,10 @@ export async function purgeOrphanScreenshots(input?: {
   if (stored.length === 0) return { scanned: 0, deleted: 0, failed: 0 };
 
   const db = await getDb();
+  // Only bookings still holding a file can name one, so only those are read.
   const bookings = await collections
     .bookings(db)
-    .find({}, { projection: { paymentScreenshotKey: 1, "payments.screenshotKey": 1 } })
+    .find(HOLDS_SCREENSHOT, { projection: { paymentScreenshotKey: 1, "payments.screenshotKey": 1 } })
     .toArray();
 
   const referenced = new Set<string>();
@@ -2225,14 +2243,13 @@ export async function purgeExpiredScreenshots(input?: {
 }): Promise<{ bookings: number; deleted: number; failed: number }> {
   const now = input?.now ?? new Date();
   const retainDays = input?.retainDays ?? SCREENSHOT_RETAIN_DAYS;
-  // Booking dates are plain IST day strings, so the cutoff is one too and the
-  // comparison is a lexical one Mongo can answer from the index.
+  // Booking dates are plain IST day strings, so the cutoff is one too.
   const cutoff = istDateString(new Date(now.getTime() - retainDays * 86_400_000));
 
   const db = await getDb();
   const stale = await collections
     .bookings(db)
-    .find({ date: { $lt: cutoff }, "payments.screenshotKey": { $ne: null } })
+    .find({ date: { $lt: cutoff }, ...HOLDS_SCREENSHOT })
     .toArray();
 
   let deleted = 0;

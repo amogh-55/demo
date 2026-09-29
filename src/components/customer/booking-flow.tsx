@@ -1079,7 +1079,7 @@ export function BookingFlow({
                       >
                         {/* A picture of the thing itself: "Bowling Machine" means
                             nothing to a customer who has not been here before. */}
-                        <span className="relative mb-3 block h-24 w-full overflow-hidden rounded-md bg-ink-900">
+                        <span className="relative mb-3 block h-32 w-full overflow-hidden rounded-md bg-ink-900">
                           <Image
                             src={facilityPhoto(f.slug)}
                             alt=""
@@ -1092,18 +1092,8 @@ export function BookingFlow({
                           {f.name}
                           {active ? <Check className="h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" /> : null}
                         </span>
-                        <span className="mt-0.5 text-xs text-ink-400">
-                          {f.kind === "OVERS"
-                            ? f.fromPricePerBlock !== null
-                              ? `By the over · from ${formatCurrency(f.fromPricePerBlock)} / ${f.oversPerSlot} overs`
-                              : "By the over"
-                            : f.fromPrice !== null
-                              ? `By the hour · from ${formatCurrency(f.fromPrice)}`
-                              : "By the hour"}
-                        </span>
-                        {f.description ? (
-                          <span className="mt-1 break-words text-xs text-ink-400">{f.description}</span>
-                        ) : null}
+                        {/* No price or blurb here: the slot grid shows the price of
+                            every slot on the next step, and the photo says the rest. */}
                       </button>
                     </li>
                   );
@@ -1261,7 +1251,9 @@ export function BookingFlow({
                   </ul>
                   {/* Pads, helmet, gloves and a bat are lent for synthetic; a leather ball needs your own bat. */}
                   {/leather/i.test(ball?.name ?? "") ? (
-                    <p className="mt-2 text-xs text-ink-300">For leather ball, bring your own bat.</p>
+                    <Alert tone="success" className="mt-2 inline-block px-2.5 py-1.5 text-xs">
+                      For leather ball, bring your own bat.
+                    </Alert>
                   ) : null}
                 </div>
 

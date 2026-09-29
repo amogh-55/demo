@@ -2863,6 +2863,282 @@ describe("booking engine", { skip: !HAS_DB }, () => {
     });
   });
 
+  /* ── Scaling: indexes and query plans ──────────────────────────────── */
+
+  /**
+   * History grows by tens of thousands of bookings a year and is never deleted, so
+   * every query on a booking path, and every count on an admin screen, has to be
+   * answered from an index rather than by reading that history. These pin the
+   * shapes the code sends and the plans MongoDB picks for them; the sizes they
+   * were chosen at are in db.ts.
+   */
+  describe("scaling", () => {
+    type Plan = { stages: string[]; docs: number };
+    const planOf = (explained: Record<string, any>): Plan => {
+      // A pipeline explains under `stages[0].$cursor` on the classic engine and at
+      // the top level when it runs whole in the slot-based one.
+      const root = explained.stages?.[0]?.$cursor ?? explained;
+      const winning = root.queryPlanner.winningPlan;
+      const stages: string[] = [];
+      (function walk(stage: Record<string, any> | undefined) {
+        if (!stage) return;
+        stages.push(stage.indexName ? `${stage.stage}:${stage.indexName}` : stage.stage);
+        walk(stage.inputStage);
+        (stage.inputStages ?? []).forEach(walk);
+      })(winning.queryPlan ?? winning);
+      return { stages, docs: root.executionStats.totalDocsExamined };
+    };
+    const findPlan = async (name: "bookings" | "slotUnits" | "dayBlocks", filter: object, sort?: object) =>
+      planOf(await (collections[name](db).find(filter as never).sort((sort ?? {}) as never).limit(20).explain("executionStats") as Promise<object>));
+    // What countDocuments sends. A raw command, because the driver refuses to
+    // explain an aggregate on a connection string that carries a write concern.
+    const countPlan = async (name: "bookings" | "slotUnits" | "dayBlocks", filter: object) =>
+      planOf(
+        await db.command({
+          explain: { aggregate: name, pipeline: [{ $match: filter }, { $group: { _id: 1, n: { $sum: 1 } } }], cursor: {} },
+          verbosity: "executionStats",
+        }),
+      );
+    const indexed = (label: string, plan: Plan) =>
+      assert.ok(!plan.stages.includes("COLLSCAN"), `${label} must use an index, got ${plan.stages.join(" > ")}`);
+
+    /** One of each state a booking can be in, the way the app itself gets them there. */
+    async function mixedBookings() {
+      const date = futureDate(3);
+      const submit = async (startMin: number, name: string) => {
+        const hold = await service.createHold({ resourceId: RESOURCE_ID, date, startMin, endMin: startMin + 60 });
+        return service.submitBooking({
+          holdToken: hold.holdToken,
+          customerName: name,
+          customerPhone: "9876500031",
+          paymentScreenshotKey: SCREENSHOT,
+          utr: UTR,
+        });
+      };
+      const pending = await submit(1020, "ZZ Scale Pending");
+      const upcoming = await service.confirmBooking((await acceptPayment(await submit(1080, "ZZ Scale Upcoming")))._id, ADMIN);
+      const played = await service.confirmBooking((await acceptPayment(await submit(1140, "ZZ Scale Played")))._id, ADMIN);
+      await collections.bookings(db).updateOne({ _id: played._id }, { $set: { date: pastDate(3) } });
+      const rejected = await service.rejectBooking((await submit(1200, "ZZ Scale Rejected"))._id, "No payment", ADMIN);
+      const expired = await submit(1260, "ZZ Scale Expired");
+      await collections.bookings(db).updateOne({ _id: expired._id }, { $set: { status: "EXPIRED" } });
+      // The other ground, so a ground filter has something to leave out.
+      const elsewhere = await service.createManualBooking({
+        resourceId: COURT_1_ID,
+        date,
+        startMin: 1020,
+        endMin: 1080,
+        customerName: "ZZ Scale Elsewhere",
+        customerPhone: "9876500032",
+        admin: ADMIN,
+      });
+      await collections.bookings(db).updateOne({ _id: elsewhere._id }, { $set: { locationId: OTHER_LOCATION_ID } });
+      return { date, pending, upcoming, played, rejected, expired, elsewhere };
+    }
+
+    it("builds the indexes the queries rely on, and drops the ones they replaced", async () => {
+      const names = async (name: "bookings" | "slotUnits") =>
+        new Set((await collections[name](db).listIndexes().toArray()).map((i) => i.name as string));
+      const bookings = await names("bookings");
+      const units = await names("slotUnits");
+
+      for (const expected of [
+        "reference_1",
+        "status_1_createdAt_-1",
+        "createdAt_-1",
+        "date_1_status_1",
+        "resourceId_1_date_1",
+        "razorpayOrderIds_1",
+        "locationId_1_status_1_date_1_endMin_1",
+        "status_1_date_1_endMin_1_locationId_1",
+        "facilityName_1_locationId_1_status_1_date_1_endMin_1",
+        "to_verify",
+        "screenshot_held",
+        "payment_screenshot_held",
+      ]) {
+        assert.ok(bookings.has(expected), `bookings is missing ${expected}`);
+      }
+      for (const expected of ["slot_unit_identity_v2", "resourceId_1_date_1_status_1", "holdTokenHash_1", "bookingId_1", "status_1_date_1"]) {
+        assert.ok(units.has(expected), `slotUnits is missing ${expected}`);
+      }
+      assert.ok(!bookings.has("locationId_1_date_1"), "superseded by locationId_1_status_1_date_1_endMin_1");
+      assert.ok(!units.has("status_1_holdUntil_1"), "superseded by status_1_date_1");
+
+      // The double-booking guard itself.
+      const identity = (await collections.slotUnits(db).listIndexes().toArray()).find((i) => i.name === "slot_unit_identity_v2");
+      assert.equal(identity?.unique, true);
+      assert.deepEqual(identity?.key, { resourceId: 1, date: 1, startMin: 1 });
+    });
+
+    it("answers every booking-path query from an index", async () => {
+      const { date, pending } = await mixedBookings();
+      const now = new Date();
+      const today = futureDate(0);
+      const taken = { $or: [{ status: { $in: ["PENDING", "BOOKED"] } }, { status: "HELD", holdUntil: { $gt: now } }] };
+
+      // Customer: the grid, the hold, the refusal, the recovery.
+      indexed("availability", await findPlan("slotUnits", { resourceId: RESOURCE_ID, date }));
+      indexed("day block", await findPlan("dayBlocks", { resourceId: RESOURCE_ID, date }));
+      indexed("fast refusal", await countPlan("slotUnits", { resourceId: RESOURCE_ID, date, startMin: { $in: [1020, 1080] }, ...taken }));
+      indexed(
+        "hold claim",
+        await findPlan("slotUnits", {
+          resourceId: RESOURCE_ID,
+          date,
+          startMin: 1020,
+          $or: [{ status: "AVAILABLE" }, { status: "HELD", holdUntil: { $lte: now } }],
+        }),
+      );
+      indexed("hold by token", await findPlan("slotUnits", { holdTokenHash: pending.holdTokenHash }));
+      indexed("booking's units", await findPlan("slotUnits", { bookingId: pending._id, status: "PENDING" }));
+      indexed("submit race", await findPlan("bookings", { holdTokenHash: pending.holdTokenHash, resourceId: RESOURCE_ID, date }));
+
+      // Receipt, webhook and the abandoned-payment sweep.
+      indexed("by reference", await findPlan("bookings", { reference: pending.reference }));
+      indexed("by order", await findPlan("bookings", { razorpayOrderIds: "order_x" }));
+      const abandoned = { status: "PENDING", paymentMethod: "RAZORPAY", amountPaid: 0, createdAt: { $lt: now } };
+      indexed("sweep, one day", await findPlan("bookings", { resourceId: RESOURCE_ID, date, ...abandoned }));
+      indexed("sweep, all", await findPlan("bookings", abandoned));
+
+      // Dashboard.
+      for (const scope of [{}, { locationId: { $in: [LOCATION_ID] } }]) {
+        indexed("today", await findPlan("bookings", { ...scope, date: today, status: { $in: ["PENDING", "CONFIRMED"] } }, { startMin: 1 }));
+        indexed("blocked ahead", await countPlan("slotUnits", { ...scope, status: "BLOCKED", date: { $gte: today } }));
+      }
+
+      // The screenshot jobs, which the partial indexes exist for.
+      const held = { $or: [{ paymentScreenshotKey: { $type: "string" } }, { "payments.screenshotKey": { $type: "string" } }] };
+      indexed("screenshot purge", await findPlan("bookings", { date: { $lt: today }, ...held }));
+      indexed("orphan scan", await findPlan("bookings", held));
+    });
+
+    it("counts every admin tab without reading a booking", async () => {
+      const { TO_VERIFY, playedFilter, upcomingFilter } = await import("../src/lib/booking/admin-list");
+      await mixedBookings();
+
+      /*
+       * `strict`: the screens the owner opens by default, where the plan is pinned
+       * down to reading no booking at all. With a few rows here the planner can
+       * pick a different plan for a sport than it does over real history, so those
+       * are only held to using an index; their plans were checked at 250,000.
+       */
+      for (const [where, scope, strict] of [
+        ["every ground", {}, true],
+        ["one ground", { locationId: { $in: [LOCATION_ID] } }, true],
+        ["one sport", { facilityName: "Box Cricket" }, false],
+        ["one sport at one ground", { facilityName: "Box Cricket", locationId: { $in: [LOCATION_ID] } }, false],
+      ] as const) {
+        // These three grow with every booking ever taken.
+        for (const [tab, filter] of [
+          ["confirmed", upcomingFilter()],
+          ["completed", playedFilter()],
+          ["rejected", { status: { $in: ["REJECTED", "CANCELLED", "EXPIRED"] } }],
+        ] as const) {
+          const plan = await countPlan("bookings", { ...scope, ...filter });
+          indexed(`${tab}, ${where}`, plan);
+          if (strict) {
+            assert.equal(plan.docs, 0, `${tab}, ${where} must be counted from the index alone: ${plan.stages.join(" > ")}`);
+          }
+        }
+        // These are live queues, a handful at any size: reading their bookings is fine.
+        indexed(`pending, ${where}`, await countPlan("bookings", { ...scope, status: "PENDING" }));
+        indexed(`to verify, ${where}`, await countPlan("bookings", { ...scope, ...TO_VERIFY }));
+      }
+    });
+
+    it("gives every tab the same count as its list, by index and by search alike", async () => {
+      const { listBookings } = await import("../src/lib/booking/admin-list");
+      const b = await mixedBookings();
+      const expected = { all: 6, pending: 1, verify: 1, confirmed: 2, completed: 1, rejected: 2 };
+
+      const everywhere = await listBookings({ page: 1 });
+      assert.deepEqual(everywhere.counts, expected);
+      // A search runs the single-pass path; one matching everything must agree.
+      assert.deepEqual((await listBookings({ page: 1, search: "ZZ Scale" })).counts, expected);
+
+      for (const tab of Object.keys(expected) as Array<keyof typeof expected>) {
+        const list = await listBookings({ page: 1, tab });
+        assert.equal(list.total, expected[tab], `${tab} total`);
+        assert.equal(list.bookings.length, expected[tab], `${tab} rows`);
+      }
+
+      // One ground: the other ground's booking drops out of every count.
+      const here = await listBookings({ page: 1, locationId: LOCATION_ID.toHexString() });
+      assert.deepEqual(here.counts, { ...expected, all: 5, confirmed: 1 });
+      const there = await listBookings({ page: 1, locationId: OTHER_LOCATION_ID.toHexString(), tab: "confirmed" });
+      assert.deepEqual(there.bookings.map((x) => x.reference), [b.elsewhere.reference]);
+
+      // One sport, which is asked for by name.
+      const pickleball = await listBookings({ page: 1, sport: "Pickleball" });
+      assert.deepEqual(pickleball.counts, { all: 1, pending: 0, verify: 0, confirmed: 1, completed: 0, rejected: 0 });
+      assert.deepEqual((await listBookings({ page: 1, sport: "Box Cricket" })).counts, { ...expected, all: 5, confirmed: 1 });
+
+      // A narrowing only an old link carries still counts what it shows.
+      const narrowed = await listBookings({ page: 1, payment: "VERIFIED" });
+      assert.equal(narrowed.total, narrowed.bookings.length);
+    });
+
+    describe("screenshot purge", () => {
+      const backdate = (id: ObjectId) =>
+        collections.bookings(db).updateOne({ _id: id }, { $set: { date: pastDate(30) } });
+
+      it("leaves a booking with no payment attempts alone, instead of rewriting it every night", async () => {
+        const hold = await service.createHold({ resourceId: BOWLING_ID, date: futureDate(1), startMin: 1020, overs: 20, ballTypeId: "synthetic" });
+        const booking = await service.submitBooking({
+          holdToken: hold.holdToken,
+          customerName: "At The Ground",
+          customerPhone: "9876500033",
+          paymentScreenshotKey: null,
+        });
+        assert.equal(booking.payAtVenue, true);
+        assert.deepEqual(booking.payments, []);
+        await backdate(booking._id);
+        const before = await collections.bookings(db).findOne({ _id: booking._id });
+
+        assert.equal((await service.purgeExpiredScreenshots()).bookings, 0);
+        const after = await collections.bookings(db).findOne({ _id: booking._id });
+        assert.deepEqual(after!.updatedAt, before!.updatedAt, "nothing to delete means nothing written");
+      });
+
+      it("clears a file even when another attempt on the booking never had one", async () => {
+        const hold = await service.createHold({ resourceId: RESOURCE_ID, date: futureDate(1), startMin: 1020, endMin: 1080 });
+        const booking = await service.submitBooking({
+          holdToken: hold.holdToken,
+          customerName: "Mixed Evidence",
+          customerPhone: "9876500034",
+          paymentScreenshotKey: REAL_SCREENSHOT,
+          utr: UTR,
+        });
+        // Cash taken at the counter as well: an attempt with no image beside one with.
+        await service.recordManualPayment({ bookingId: booking._id, amount: 100, note: "Cash", admin: ADMIN });
+        await backdate(booking._id);
+
+        assert.equal((await service.purgeExpiredScreenshots()).bookings, 1);
+        const stored = await collections.bookings(db).findOne({ _id: booking._id });
+        assert.ok(stored!.payments.every((p) => p.screenshotKey === null));
+        assert.ok(stored!.payments[0]!.screenshotExpiredAt, "the one that had a file is marked expired");
+        assert.equal(stored!.amountPaid, 100, "the money is untouched");
+      });
+
+      it("clears a file kept only on the booking itself", async () => {
+        // Pay-at-the-ground with a screenshot sent anyway: no payment attempt, one file.
+        const hold = await service.createHold({ resourceId: BOWLING_ID, date: futureDate(1), startMin: 1080, overs: 20, ballTypeId: "synthetic" });
+        const booking = await service.submitBooking({
+          holdToken: hold.holdToken,
+          customerName: "Sent One Anyway",
+          customerPhone: "9876500035",
+          paymentScreenshotKey: REAL_SCREENSHOT,
+        });
+        assert.deepEqual(booking.payments, []);
+        assert.equal(booking.paymentScreenshotKey, REAL_SCREENSHOT);
+        await backdate(booking._id);
+
+        assert.equal((await service.purgeExpiredScreenshots()).bookings, 1);
+        assert.equal((await collections.bookings(db).findOne({ _id: booking._id }))!.paymentScreenshotKey, null);
+      });
+    });
+  });
+
   /* ── Online payment (Razorpay) ───────────────────────────────────────── */
 
   /**

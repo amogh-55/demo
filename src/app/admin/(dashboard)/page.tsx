@@ -50,11 +50,11 @@ export default async function AdminDashboardPage({
   const scope = activeIds.length ? { locationId: { $in: activeIds.map((id) => new ObjectId(id)) } } : {};
   const live = { $in: ["PENDING", "CONFIRMED"] as Array<"PENDING" | "CONFIRMED"> };
 
-  const [byStatus, todayBookings, toVerify, upcoming, blockedUnits, blockedDays, takings] = await Promise.all([
-    collections
-      .bookings(db)
-      .aggregate<{ _id: string; count: number }>([{ $match: scope }, { $group: { _id: "$status", count: { $sum: 1 } } }])
-      .toArray(),
+  const [pendingCount, rejectedCount, todayBookings, toVerify, upcoming, blockedUnits, blockedDays, takings] = await Promise.all([
+    // Counted from the status indexes. A $group by status here read every booking
+    // ever taken on each visit to the dashboard.
+    collections.bookings(db).countDocuments({ ...scope, status: "PENDING" }),
+    collections.bookings(db).countDocuments({ ...scope, status: { $in: ["REJECTED", "CANCELLED", "EXPIRED"] } }),
     // The whole day, not a sample: this list is what the owner runs the gate from.
     collections
       .bookings(db)
@@ -81,11 +81,8 @@ export default async function AdminDashboardPage({
       .toArray(),
   ]);
 
-  const count = (...statuses: string[]) =>
-    byStatus.filter((s) => statuses.includes(s._id)).reduce((sum, s) => sum + s.count, 0);
   const collectedToday = takings[0]?.total ?? 0;
   const todayCount = takings[0]?.count ?? 0;
-  const pendingCount = count("PENDING");
 
   /** What is happening now, or next — the question asked walking up to the ground. */
   const next = todayBookings.find((b) => b.endMin > nowMin) ?? null;
@@ -197,7 +194,7 @@ export default async function AdminDashboardPage({
               href="/admin/bookings?tab=rejected"
               icon={CircleX}
               tone="red"
-              value={count("REJECTED", "CANCELLED", "EXPIRED")}
+              value={rejectedCount}
               label="Rejected"
             />
             <MiniStat href="/admin/availability" icon={Ban} tone="ink" value={blockedUnits + blockedDays} label="Blocked ahead" />

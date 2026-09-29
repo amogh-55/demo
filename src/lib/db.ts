@@ -147,7 +147,9 @@ const INDEXES: IndexSpec[] = [
   { collection: "slotUnits", name: "locationId_1_date_1_status_1", keys: { locationId: 1, date: 1, status: 1 } },
   { collection: "slotUnits", name: "holdTokenHash_1", keys: { holdTokenHash: 1 } },
   { collection: "slotUnits", name: "bookingId_1", keys: { bookingId: 1 } },
-  { collection: "slotUnits", name: "status_1_holdUntil_1", keys: { status: 1, holdUntil: 1 } },
+  // "Blocked ahead" on the dashboard, across every ground: reads only the blocks
+  // still to come, where the index it replaced walked every block ever made.
+  { collection: "slotUnits", name: "status_1_date_1", keys: { status: 1, date: 1 } },
 
   {
     collection: "dayBlocks",
@@ -161,7 +163,62 @@ const INDEXES: IndexSpec[] = [
 
   { collection: "bookings", name: "reference_1", keys: { reference: 1 }, options: { unique: true } },
   { collection: "bookings", name: "status_1_createdAt_-1", keys: { status: 1, createdAt: -1 } },
-  { collection: "bookings", name: "locationId_1_date_1", keys: { locationId: 1, date: 1 } },
+  /**
+   * The admin tab counts, which run on every load of the bookings list and the
+   * dashboard. Two orderings because each serves the case the other cannot:
+   * one ground leads with the ground, every ground leads with the status. With
+   * date and end time in the key, Confirmed and Completed are counted from the
+   * index alone — never a booking read — however much history there is.
+   *
+   * The first also replaces { locationId, date }: it starts with the same field,
+   * so everything that used that one uses this.
+   */
+  {
+    collection: "bookings",
+    name: "locationId_1_status_1_date_1_endMin_1",
+    keys: { locationId: 1, status: 1, date: 1, endMin: 1 },
+  },
+  {
+    collection: "bookings",
+    name: "status_1_date_1_endMin_1_locationId_1",
+    keys: { status: 1, date: 1, endMin: 1, locationId: 1 },
+  },
+  // The same counts under the Sport filter, alone or with a ground. By name,
+  // because that is how the filter asks: one sport spans grounds.
+  {
+    collection: "bookings",
+    name: "facilityName_1_locationId_1_status_1_date_1_endMin_1",
+    keys: { facilityName: 1, locationId: 1, status: 1, date: 1, endMin: 1 },
+  },
+  /**
+   * The "To verify" queue. Partial, so it holds only bookings with a payment
+   * nobody has ruled on — a handful — rather than the whole history the queue
+   * used to be picked out of one booking at a time.
+   */
+  {
+    collection: "bookings",
+    name: "to_verify",
+    keys: { status: 1, createdAt: -1 },
+    options: { partialFilterExpression: { "payments.status": "PENDING" } },
+  },
+  /**
+   * Bookings still holding a screenshot file — about a week's worth, since the
+   * retention job clears them after that. Both cleanup jobs start from these two,
+   * so neither reads the rest of the history. Two because a key can sit on the
+   * booking, on a payment attempt, or on both.
+   */
+  {
+    collection: "bookings",
+    name: "screenshot_held",
+    keys: { paymentScreenshotKey: 1 },
+    options: { partialFilterExpression: { paymentScreenshotKey: { $type: "string" } } },
+  },
+  {
+    collection: "bookings",
+    name: "payment_screenshot_held",
+    keys: { "payments.screenshotKey": 1 },
+    options: { partialFilterExpression: { "payments.screenshotKey": { $type: "string" } } },
+  },
   // The dashboard asks "what is on today, across every ground" three times over
   // — the takings, the list and the upcoming count — and had no index for it.
   { collection: "bookings", name: "date_1_status_1", keys: { date: 1, status: 1 } },
@@ -203,6 +260,11 @@ const INDEXES: IndexSpec[] = [
 const RETIRED: Array<{ collection: keyof typeof collections; name: string }> = [
   { collection: "slotUnits", name: "slot_unit_identity" },
   { collection: "dayBlocks", name: "locationId_1_date_1" },
+  // Superseded rather than wrong. locationId_1_status_1_date_1_endMin_1 starts
+  // with the same field as the first; status_1_date_1 answers the optional hold
+  // cleanup by its status prefix (live holds are a handful) and "blocked ahead" too.
+  { collection: "bookings", name: "locationId_1_date_1" },
+  { collection: "slotUnits", name: "status_1_holdUntil_1" },
 ];
 
 export function ensureIndexes(db: Db): Promise<void> {
