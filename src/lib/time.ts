@@ -99,8 +99,10 @@ export function formatCompactRange(startMin: number, endMin: number): string {
   };
   const from = part(startMin);
   const to = part(endMin);
-  // Past midnight both ends say AM, but "6 – 2 AM" reads as nonsense: name both.
-  return from.suffix === to.suffix && endMin > startMin
+  // Both ends can say AM without being the same morning — 6 AM to 2 AM past
+  // midnight, or 6 AM to midnight — and "6 – 12 AM" reads as six hours, not
+  // eighteen. Only a range under twelve hours forward shares one AM or PM.
+  return from.suffix === to.suffix && endMin > startMin && endMin - startMin < 720
     ? `${from.clock} – ${to.clock} ${to.suffix}`
     : `${from.clock} ${from.suffix} – ${to.clock} ${to.suffix}`;
 }

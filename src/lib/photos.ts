@@ -46,14 +46,14 @@ export interface GalleryPhoto {
 const LOCATION_PHOTOS: Record<string, GalleryPhoto[]> = {
   medipally: [
     { src: "/images/boxnight.jpg", alt: "Box cricket under the floodlights" },
-    { src: "/images/boxpeople.jpg", alt: "A side after their game on the turf" },
     { src: "/images/box.jpg", alt: "The box cricket turf by day" },
     { src: "/images/nets.jpg", alt: "Batting in the practice nets" },
+    { src: "/images/boxpeople.jpg", alt: "A side after their game on the turf" },
     { src: "/images/machine.jpg", alt: "The bowling machine set up at the net" },
+    { src: "/images/machine2.jpg", alt: "Loading the machine, balls down the lane" },
     { src: "/images/box2.jpg", alt: "The cage from outside" },
     { src: "/images/floodlight-turf.jpg", alt: "Floodlit turf at night" },
     { src: "/images/box-cricket-turf.jpg", alt: "Box cricket turf" },
-    { src: "/images/batsman-action.jpg", alt: "Batsman playing a shot in the nets" },
     { src: "/images/ball-closeup.jpg", alt: "Cricket ball on the turf" },
   ],
   vanasthalipuram: [
