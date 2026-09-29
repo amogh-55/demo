@@ -7,6 +7,7 @@ import {
   hoursTouched,
   minutesForOvers,
   oversLadder,
+  openWindows,
   priceForStart,
   resolveUnits,
   freeRunLength,
@@ -56,6 +57,33 @@ describe("slot template", () => {
   it("prices a unit from the band containing its start", () => {
     assert.equal(priceForStart(CONFIG.priceRules, 17 * 60), 800);
     assert.equal(priceForStart(CONFIG.priceRules, 19 * 60), 900); // band boundary is half-open
+  });
+});
+
+describe("hours that run past midnight", () => {
+  // Open 6 AM, close 2 AM: every date sells 12–2 AM and 6 AM–midnight.
+  const night = { ...CONFIG, openMin: 6 * 60, closeMin: 2 * 60, priceRules: [{ fromMin: 0, toMin: 24 * 60, price: 500 }] };
+
+  it("opens the first hours of the date and the evening, and nothing between", () => {
+    assert.deepEqual(openWindows(6 * 60, 2 * 60), [[0, 120], [360, 1440]]);
+    assert.deepEqual(openWindows(6 * 60, 23 * 60), [[360, 1380]]);
+    assert.deepEqual(openWindows(6 * 60, 6 * 60), []);
+    const starts = buildDayTemplate(night).map((u) => u.startMin);
+    assert.deepEqual(starts.slice(0, 3), [0, 60, 360]);
+    assert.equal(starts.at(-1), 23 * 60);
+    assert.equal(starts.length, 2 + 18);
+    assert.ok(!starts.some((m) => m >= 120 && m < 360), "2–6 AM is shut");
+  });
+
+  it("never lets a booking jump the closed hours", () => {
+    assert.equal(resolveUnits(buildDayTemplate(night), 60, 7 * 60), null, "1 AM to 7 AM would cross 2–6 AM");
+    assert.equal(resolveUnits(buildDayTemplate(night), 0, 120)?.length, 2);
+  });
+
+  it("caps the overs ladder at the longest open stretch", () => {
+    // 6 AM–midnight is 72 quarters, the longest run a session could take.
+    assert.equal(oversLadder(10, 15, 6 * 60, 2 * 60).at(-1), 720);
+    assert.equal(oversLadder(10, 15, 22 * 60, 2 * 60).at(-1), 80, "10 PM–2 AM: two hours each side");
   });
 });
 

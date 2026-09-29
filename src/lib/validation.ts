@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ObjectId } from "mongodb";
 import { isValidBusinessDate, MINUTES_IN_DAY } from "./time";
+import { openSlotStarts, openWindows } from "./booking/schedule";
 import type { PriceRule } from "./types";
 
 export const objectIdSchema = z
@@ -362,11 +363,9 @@ const ballTypeSchema = z.object({
  */
 /** Whether every slot the operating window produces falls inside some price band. */
 function coversEveryStart(rules: PriceRule[], openMin: number, closeMin: number, slotMinutes: number): boolean {
-  if (!(slotMinutes > 0) || !(closeMin > openMin)) return true; // Other refinements report these.
-  for (let start = openMin; start + slotMinutes <= closeMin; start += slotMinutes) {
-    if (!rules.some((r) => start >= r.fromMin && start < r.toMin)) return false;
-  }
-  return true;
+  return openSlotStarts(openMin, closeMin, slotMinutes).every((start) =>
+    rules.some((r) => start >= r.fromMin && start < r.toMin),
+  );
 }
 
 export const facilityConfigSchema = z
@@ -400,8 +399,12 @@ export const facilityConfigSchema = z
     advancePercent: z.number().int().min(0).max(99).default(0),
     ballTypes: z.array(ballTypeSchema).default([]),
   })
-  .refine((c) => c.closeMin > c.openMin, { message: "Closing time must be after opening time", path: ["closeMin"] })
-  .refine((c) => (c.closeMin - c.openMin) % c.slotMinutes === 0, {
+  // Closing earlier than opening is a night that runs past midnight (see openWindows).
+  .refine((c) => c.closeMin !== c.openMin, {
+    message: "Opening and closing time cannot be the same. For 24 hours, open at 12:00 AM and close at 12:00 AM (midnight)",
+    path: ["closeMin"],
+  })
+  .refine((c) => openWindows(c.openMin, c.closeMin).every(([from, to]) => (to - from) % c.slotMinutes === 0), {
     message: "Operating hours must divide evenly into slots",
     path: ["slotMinutes"],
   })

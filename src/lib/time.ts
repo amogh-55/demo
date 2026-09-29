@@ -99,7 +99,8 @@ export function formatCompactRange(startMin: number, endMin: number): string {
   };
   const from = part(startMin);
   const to = part(endMin);
-  return from.suffix === to.suffix
+  // Past midnight both ends say AM, but "6 – 2 AM" reads as nonsense: name both.
+  return from.suffix === to.suffix && endMin > startMin
     ? `${from.clock} – ${to.clock} ${to.suffix}`
     : `${from.clock} ${from.suffix} – ${to.clock} ${to.suffix}`;
 }

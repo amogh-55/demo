@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/auth";
 import { forgetResourceContext } from "@/lib/booking/service";
 import { collections, getDb } from "@/lib/db";
 import { appError } from "@/lib/errors";
+import { MINUTES_IN_DAY } from "@/lib/time";
 import { facilityConfigSchema, facilityUpdateSchema } from "@/lib/validation";
 import type { FacilityConfig } from "@/lib/types";
 
@@ -58,12 +59,13 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     // to mark the hours as sellable. They are laid over the submitted hours BEFORE
     // validation: checked first, the old hidden band (say 6 AM–11 PM) failed the
     // coverage rule the moment the owner widened the hours, and they cannot even
-    // see that band to fix it.
+    // see that band to fix it. The band spans the whole date so hours that run
+    // past midnight are covered too; the hours alone decide what is sellable.
     const submitted = facilityConfigSchema.parse(
       facility.kind === "OVERS" && body && typeof body === "object"
         ? {
             ...body,
-            priceRules: [{ fromMin: (body as { openMin?: unknown }).openMin, toMin: (body as { closeMin?: unknown }).closeMin, price: 0 }],
+            priceRules: [{ fromMin: 0, toMin: MINUTES_IN_DAY, price: 0 }],
             weekendPriceRules: [],
           }
         : body,

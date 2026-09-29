@@ -165,8 +165,27 @@ describe("facility configuration", () => {
     assert.equal(facilityConfigSchema.parse(base).slotMinutes, 60);
   });
 
-  it("rejects closing before opening", () => {
-    assert.equal(facilityConfigSchema.safeParse({ ...base, closeMin: 5 * 60 }).success, false);
+  /** 6 AM to 2 AM: the night runs past midnight and 2–6 AM is shut. */
+  it("accepts closing after midnight when the bands cover both parts of the night", () => {
+    const overnight = {
+      ...base,
+      closeMin: 2 * 60,
+      priceRules: [
+        { fromMin: 0, toMin: 2 * 60, price: 900 },
+        { fromMin: 6 * 60, toMin: 24 * 60, price: 800 },
+      ],
+    };
+    assert.equal(facilityConfigSchema.safeParse(overnight).success, true);
+    assert.equal(facilityConfigSchema.safeParse({ ...bowling, closeMin: 2 * 60, priceRules: [{ fromMin: 0, toMin: 24 * 60, price: 0 }] }).success, true);
+  });
+
+  it("refuses an overnight schedule whose after-midnight hours have no price", () => {
+    // base prices 6 AM–11 PM only, so 12–2 AM would vanish from the grid.
+    assert.equal(facilityConfigSchema.safeParse({ ...base, closeMin: 2 * 60 }).success, false);
+  });
+
+  it("rejects the same opening and closing time", () => {
+    assert.equal(facilityConfigSchema.safeParse({ ...base, closeMin: 6 * 60 }).success, false);
   });
 
   it("rejects hours that do not divide into whole slots", () => {

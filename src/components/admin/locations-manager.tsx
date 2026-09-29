@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
+import { openSlotStarts, openWindows } from "@/lib/booking/schedule";
 import { formatMinutes, minutesToDuration } from "@/lib/time";
 import { Alert, Button, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
@@ -144,14 +145,6 @@ function PriceInput({
 
 type Problems = Record<string, string>;
 
-/** Every slot start the operating window produces. */
-function slotStarts(openMin: number, closeMin: number, slotMinutes: number): number[] {
-  const starts: number[] = [];
-  if (!(slotMinutes > 0) || !(closeMin > openMin)) return starts;
-  for (let m = openMin; m + slotMinutes <= closeMin; m += slotMinutes) starts.push(m);
-  return starts;
-}
-
 /**
  * The runs of time inside the operating window that no band prices.
  *
@@ -163,14 +156,16 @@ function gapBands(rules: PriceRule[], openMin: number, closeMin: number, slotMin
   const gaps: PriceRule[] = [];
   let run: { from: number; to: number } | null = null;
 
-  for (const start of slotStarts(openMin, closeMin, slotMinutes)) {
+  for (const start of openSlotStarts(openMin, closeMin, slotMinutes)) {
     const priced = rules.some((r) => start >= r.fromMin && start < r.toMin);
     if (priced) {
       if (run) gaps.push({ fromMin: run.from, toMin: run.to, price: UNSET });
       run = null;
       continue;
     }
-    run = run ? { from: run.from, to: start + slotMinutes } : { from: start, to: start + slotMinutes };
+    // A run stops at closed hours: 12–2 AM and 6 PM–midnight are two bands, not one over the night.
+    if (run && run.to !== start) gaps.push({ fromMin: run.from, toMin: run.to, price: UNSET });
+    run = run && run.to === start ? { from: run.from, to: start + slotMinutes } : { from: start, to: start + slotMinutes };
   }
   if (run) gaps.push({ fromMin: run.from, toMin: run.to, price: UNSET });
   return gaps;
@@ -187,9 +182,10 @@ function gapBands(rules: PriceRule[], openMin: number, closeMin: number, slotMin
 function scheduleProblems(config: FacilityConfig, kind: "HOURLY" | "OVERS"): Problems {
   const p: Problems = {};
 
-  if (!(config.closeMin > config.openMin)) {
-    p.closeMin = "Closing time must be after opening time.";
-  } else if ((config.closeMin - config.openMin) % config.slotMinutes !== 0) {
+  // Closing earlier than opening is fine: the night runs past midnight.
+  if (config.closeMin === config.openMin) {
+    p.closeMin = "Opening and closing time cannot be the same. For 24 hours, open at 12:00 AM and close at 12:00 AM (midnight).";
+  } else if (openWindows(config.openMin, config.closeMin).some(([from, to]) => (to - from) % config.slotMinutes !== 0)) {
     p.closeMin = `Opening hours must divide into whole ${config.slotMinutes}-minute slots.`;
   }
 
@@ -723,7 +719,8 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
     setConfig((current) => {
       const next = { ...current, ...patch };
       const hoursMoved = patch.openMin !== undefined || patch.closeMin !== undefined;
-      if (!hoursMoved || facility.kind !== "HOURLY" || !(next.closeMin > next.openMin)) return next;
+      if (!hoursMoved || facility.kind !== "HOURLY" || next.closeMin === next.openMin) return next;
+      const windows = openWindows(next.openMin, next.closeMin);
 
       const fill = (rules: PriceRule[]) => {
         if (rules.length === 0) return rules;
@@ -737,7 +734,7 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
          * work, and hours get nudged by accident.
          */
         const kept = rules.filter(
-          (rule) => isSet(rule.price) || (rule.toMin > next.openMin && rule.fromMin < next.closeMin),
+          (rule) => isSet(rule.price) || windows.some(([from, to]) => rule.toMin > from && rule.fromMin < to),
         );
         return kept.length === 0 ? kept : [...kept, ...gapBands(kept, next.openMin, next.closeMin, next.slotMinutes)];
       };
@@ -803,11 +800,18 @@ function ScheduleEditor({ facility, onSaved }: { facility: AdminFacility; onSave
           >
             {HOURS.slice(1).map((m) => (
               <option key={m} value={m}>
-                {m === 1440 ? "12:00 AM (midnight)" : formatMinutes(m)}
+                {m === 1440 ? "12:00 AM (midnight)" : m < config.openMin ? `${formatMinutes(m)} (next day)` : formatMinutes(m)}
               </option>
             ))}
           </select>
-          {problems.closeMin ? <FieldError id="close-min-error">{problems.closeMin}</FieldError> : null}
+          {problems.closeMin ? (
+            <FieldError id="close-min-error">{problems.closeMin}</FieldError>
+          ) : config.closeMin < config.openMin ? (
+            <p className="mt-1 text-xs text-ink-600">
+              Open overnight, closed {formatMinutes(config.closeMin)} – {formatMinutes(config.openMin)}. Customers book
+              the hours after midnight on the next day&apos;s date.
+            </p>
+          ) : null}
         </div>
         {/* Slot length and hold duration are deliberately not editable here. Slot
             length is the unit the double-booking index is built on — the server
@@ -1050,8 +1054,9 @@ function PriceBands({
             priceRules: [
               ...config.priceRules,
               gapBands(config.priceRules, config.openMin, config.closeMin, slotMinutes)[0] ?? {
-                fromMin: config.openMin,
-                toMin: config.closeMin,
+                // A band cannot wrap midnight, so past-midnight hours take the evening part.
+                fromMin: openWindows(config.openMin, config.closeMin).at(-1)?.[0] ?? config.openMin,
+                toMin: openWindows(config.openMin, config.closeMin).at(-1)?.[1] ?? config.closeMin,
                 price: UNSET,
               },
             ],

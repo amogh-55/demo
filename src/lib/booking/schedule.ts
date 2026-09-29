@@ -1,4 +1,4 @@
-import { istDateString, istInstant, istWeekday } from "@/lib/time";
+import { MINUTES_IN_DAY, istDateString, istInstant, istWeekday } from "@/lib/time";
 import type { BallType, FacilityConfig, PriceRule } from "@/lib/types";
 
 export interface SlotUnitTemplate {
@@ -36,6 +36,33 @@ export function rulesForDate(
 }
 
 /**
+ * The stretches of a date the facility is open, as half-open [from, to) minutes.
+ *
+ * Closing earlier than opening means the night runs past midnight: open 6 AM,
+ * close 2 AM is 6 AM to midnight plus the first two hours of every date. That is
+ * the calendar-day grid a 24-hour ground already uses, where 1 AM on Saturday
+ * night is booked on Sunday's date. Equal times open nothing; 24 hours is
+ * 12 AM to 12 AM (midnight).
+ */
+export function openWindows(openMin: number, closeMin: number): Array<[number, number]> {
+  if (closeMin > openMin) return [[openMin, closeMin]];
+  if (closeMin === openMin) return [];
+  return ([[0, closeMin], [openMin, MINUTES_IN_DAY]] as Array<[number, number]>).filter(([from, to]) => to > from);
+}
+
+/** Every slot start the operating hours produce, in time order. */
+export function openSlotStarts(openMin: number, closeMin: number, slotMinutes: number): number[] {
+  const starts: number[] = [];
+  // A zero or negative slot length would loop forever. The admin API rejects one,
+  // so this only guards against a configuration edited straight into the database.
+  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) return starts;
+  for (const [from, to] of openWindows(openMin, closeMin)) {
+    for (let start = from; start + slotMinutes <= to; start += slotMinutes) starts.push(start);
+  }
+  return starts;
+}
+
+/**
  * The atomic bookable units for a facility's operating day.
  * Half-open intervals: [start, end). 5–7 and 7–9 are adjacent, never overlapping.
  *
@@ -49,11 +76,8 @@ export function buildDayTemplate(
   date?: string,
 ): SlotUnitTemplate[] {
   const units: SlotUnitTemplate[] = [];
-  // A zero or negative slot length would loop forever. The admin API rejects one,
-  // so this only guards against a configuration edited straight into the database.
-  if (!Number.isFinite(config.slotMinutes) || config.slotMinutes <= 0) return units;
   const rules = rulesForDate(config, date);
-  for (let start = config.openMin; start + config.slotMinutes <= config.closeMin; start += config.slotMinutes) {
+  for (const start of openSlotStarts(config.openMin, config.closeMin, config.slotMinutes)) {
     const price = priceForStart(rules, start);
     if (price === null) continue; // Unpriced time is not sellable.
     units.push({ startMin: start, endMin: start + config.slotMinutes, price });
@@ -192,7 +216,9 @@ export function sessionStartFor(
  * beside it could only ever disagree with it.
  */
 export function oversLadder(oversPerSlot: number, slotMinutes: number, openMin: number, closeMin: number): number[] {
-  const maxSlots = Math.floor((closeMin - openMin) / slotMinutes);
+  // A session cannot jump the closed hours, so the longest open stretch is the cap.
+  const longest = Math.max(0, ...openWindows(openMin, closeMin).map(([from, to]) => to - from));
+  const maxSlots = Math.floor(longest / slotMinutes);
   const ladder: number[] = [];
   for (let slots = 1; slots <= maxSlots; slots += 1) ladder.push(slots * oversPerSlot);
   return ladder;

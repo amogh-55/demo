@@ -5,7 +5,7 @@ import { collections, getDb, getMongoClient, isDuplicateKeyError } from "@/lib/d
 import { appError, AppError } from "@/lib/errors";
 import { log } from "@/lib/log";
 import { deletePaymentScreenshot, listStoredScreenshots, type StoredScreenshot } from "@/lib/storage";
-import { daysFromToday, istDateString, istInstant, isValidBusinessDate } from "@/lib/time";
+import { MINUTES_IN_DAY, daysFromToday, istDateString, istInstant, isValidBusinessDate } from "@/lib/time";
 import type {
   BallType,
   BookingDoc,
@@ -2036,9 +2036,12 @@ export async function blockDay(input: {
   const now = input.now ?? new Date();
   assertNotPast(input.date, now);
   const db = await getDb();
-  const { resource, config } = await loadResourceContext(db, input.resourceId, false);
+  const { resource } = await loadResourceContext(db, input.resourceId, false);
 
-  const conflicts = await findBlockConflicts(input.resourceId, input.date, config.openMin, config.closeMin, now);
+  // The whole date, not openMin–closeMin: hours that run past midnight open the
+  // date's first hours too, and a booking left outside hours that were later
+  // narrowed is still on this date.
+  const conflicts = await findBlockConflicts(input.resourceId, input.date, 0, MINUTES_IN_DAY, now);
   const confirmed = conflicts.filter((c) => c.status === "BOOKED");
   if (confirmed.length > 0) {
     throw appError(

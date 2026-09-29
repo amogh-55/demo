@@ -7,6 +7,7 @@ import { ArrowRight, MapPin, X } from "lucide-react";
 import { FacilityPricing } from "@/components/customer/facility-pricing";
 import { Button, Spinner, cn } from "@/components/ui/primitives";
 import type { PublicLocationTree } from "@/lib/catalog";
+import { groundTitle } from "@/lib/ground-titles";
 
 /**
  * "Book this ground" now answers the two questions a customer asks before they
@@ -52,7 +53,7 @@ export function GroundDialog({
         >
           <div className="flex items-start justify-between gap-3 border-b border-white/10 p-5 pb-4">
             <div className="min-w-0">
-              <Dialog.Title className="text-lg font-bold text-white">{location.name}</Dialog.Title>
+              <Dialog.Title className="text-xl font-bold text-white">{groundTitle(location)}</Dialog.Title>
               {location.address ? (
                 <p className="mt-1 flex items-start gap-1.5 text-sm text-ink-400">
                   <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />

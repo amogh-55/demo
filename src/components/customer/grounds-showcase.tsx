@@ -3,6 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import { MapPin, Navigation, Phone } from "lucide-react";
+import { groundTitle } from "@/lib/ground-titles";
 import { locationPhotos } from "@/lib/photos";
 import { FacilityPricing } from "@/components/customer/facility-pricing";
 import { GroundDialog } from "@/components/customer/ground-dialog";
@@ -45,7 +46,7 @@ export function GroundsShowcase({ locations }: { locations: PublicLocationTree[]
                     : "border-white/15 bg-white/[0.04] text-ink-300 hover:border-lime-400/50 hover:text-white",
                 )}
               >
-                {l.name}
+                {groundTitle(l)}
               </button>
             );
           })}
@@ -62,7 +63,7 @@ export function GroundsShowcase({ locations }: { locations: PublicLocationTree[]
             >
               <Image
                 src={photo.src}
-                alt={`${active.name} — ${photo.alt}`}
+                alt={`${groundTitle(active)} — ${photo.alt}`}
                 fill
                 sizes="(max-width: 1024px) 50vw, 25vw"
                 className="object-cover transition-transform duration-500 hover:scale-105"
@@ -73,7 +74,7 @@ export function GroundsShowcase({ locations }: { locations: PublicLocationTree[]
 
         {/* ── Pricing and details ───────────────────────────────────── */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-          <h3 className="text-xl font-bold text-white">{active.name}</h3>
+          <h3 className="text-2xl font-bold text-white">{groundTitle(active)}</h3>
           {active.description ? <p className="mt-1 text-sm text-ink-400">{active.description}</p> : null}
 
           <div className="mt-4 space-y-4">
@@ -111,7 +112,7 @@ export function GroundsShowcase({ locations }: { locations: PublicLocationTree[]
           </div>
 
           <div className="mt-5">
-            <GroundDialog location={active} label={`Book ${active.name}`} />
+            <GroundDialog location={active} label={`Book ${groundTitle(active)}`} />
           </div>
         </div>
       </div>

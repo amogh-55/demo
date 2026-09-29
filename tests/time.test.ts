@@ -82,6 +82,10 @@ describe("formatCompactRange", () => {
     assert.equal(formatCompactRange(23 * 60, 24 * 60), "11 PM – 12 AM");
   });
 
+  it("names both sides for hours that run past midnight", () => {
+    assert.equal(formatCompactRange(6 * 60, 2 * 60), "6 AM – 2 AM");
+  });
+
   it("keeps the minutes when a slot does not start on the hour", () => {
     assert.equal(formatCompactRange(6 * 60 + 30, 7 * 60 + 30), "6:30 – 7:30 AM");
   });

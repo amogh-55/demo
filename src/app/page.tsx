@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { DEFAULT_HOURLY_CONFIG } from "@/lib/booking/service";
 import { getPublicCatalog } from "@/lib/catalog";
+import { groundTitle } from "@/lib/ground-titles";
 import { locationCover } from "@/lib/photos";
 import { getSettings } from "@/lib/settings";
 import { MINUTES_IN_DAY, formatMinutes } from "@/lib/time";
@@ -65,7 +66,10 @@ export default async function HomePage() {
   const minPrice = prices.length ? Math.min(...prices) : DEFAULT_HOURLY_CONFIG.priceRules[0]!.price;
   const maxPrice = prices.length ? Math.max(...prices) : DEFAULT_HOURLY_CONFIG.priceRules.at(-1)!.price;
   const openMin = facilities.length ? Math.min(...facilities.map((f) => f.openMin)) : DEFAULT_HOURLY_CONFIG.openMin;
-  const closeMin = facilities.length ? Math.max(...facilities.map((f) => f.closeMin)) : DEFAULT_HOURLY_CONFIG.closeMin;
+  // A close earlier than the open is the next morning (6 AM – 2 AM), so it counts a day later.
+  const closeMin = facilities.length
+    ? Math.max(...facilities.map((f) => (f.closeMin <= f.openMin ? f.closeMin + MINUTES_IN_DAY : f.closeMin)))
+    : DEFAULT_HOURLY_CONFIG.closeMin;
   const holdMinutes = DEFAULT_HOURLY_CONFIG.holdMinutes;
   const bookingWindowDays = facilities.length
     ? Math.max(...facilities.map((f) => f.bookingWindowDays))
@@ -189,7 +193,7 @@ export default async function HomePage() {
                   <div className="relative h-48 w-full overflow-hidden bg-ink-900 lg:h-40">
                     <Image
                       src={locationCover(location.slug, location.image)}
-                      alt={location.name}
+                      alt={groundTitle(location)}
                       fill
                       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
                       className="object-cover transition-transform duration-500 group-hover:scale-105"
@@ -198,7 +202,7 @@ export default async function HomePage() {
                   </div>
                   <div className="p-5">
                     {/* Ground names and addresses are customer data — assume the longest. */}
-                    <h3 className="break-words text-lg font-bold text-white">{location.name}</h3>
+                    <h3 className="break-words text-xl font-bold text-white">{groundTitle(location)}</h3>
                     <p className="mt-2 flex items-start gap-1.5 break-words text-sm text-ink-400">
                       <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />
                       {location.address}
@@ -332,7 +336,7 @@ export default async function HomePage() {
               <ul className="mt-8 space-y-4">
                 {locations.map((l) => (
                   <li key={l.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                    <p className="break-words font-semibold text-white">{l.name}</p>
+                    <p className="break-words text-lg font-semibold text-white">{groundTitle(l)}</p>
                     <p className="mt-1 flex items-start gap-1.5 break-words text-sm text-ink-400">
                       <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-lime-400" aria-hidden="true" />
                       {l.address}

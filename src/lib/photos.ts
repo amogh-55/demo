@@ -57,17 +57,18 @@ const LOCATION_PHOTOS: Record<string, GalleryPhoto[]> = {
     { src: "/images/ball-closeup.jpg", alt: "Cricket ball on the turf" },
   ],
   vanasthalipuram: [
-    { src: "/images/machine.jpg", alt: "The bowling machine set up at the net" },
-    { src: "/images/machine2.jpg", alt: "Loading the machine, balls down the lane" },
-    { src: "/images/nets.jpg", alt: "The practice net" },
-    { src: "/images/bowler-action.jpg", alt: "Bowling machine lane" },
-    { src: "/images/hero-turf-action.jpg", alt: "Players mid-session" },
+    { src: "/images/vanmachine.jpg", alt: "The bowling machine and its operator at the net" },
+    { src: "/images/vanmachine2.jpg", alt: "The machine at the bowling end, looking down the lane" },
+    { src: "/images/vanmachine3.jpg", alt: "A batter facing the machine, seen from behind it" },
+    { src: "/images/vanmachine4.jpg", alt: "The indoor lane under the lights" },
+    { src: "/images/vanmachine5.jpg", alt: "Batting in the netted lane" },
+    { src: "/images/vanmachine6.jpg", alt: "The prices and rules board, open 6 AM to 2 AM" },
   ],
   pickleball: [
+    { src: "/images/uppal1.webp", alt: "Both pickleball courts from above" },
+    { src: "/images/uppal2.webp", alt: "The two courts side by side" },
+    { src: "/images/uppal3.webp", alt: "The courts and the clubhouse" },
     { src: "/images/pickleball.jpg", alt: "Both courts under the floodlights" },
-    { src: "/images/cricket-sunset.jpg", alt: "Court under evening light" },
-    { src: "/images/cafe-lounge.jpg", alt: "Seating and lounge" },
-    { src: "/images/floodlight-turf.jpg", alt: "Floodlights over the courts" },
   ],
 };
 
