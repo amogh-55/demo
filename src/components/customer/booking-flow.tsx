@@ -1259,6 +1259,10 @@ export function BookingFlow({
                       );
                     })}
                   </ul>
+                  {/* Pads, helmet, gloves and a bat are lent for synthetic; a leather ball needs your own bat. */}
+                  {/leather/i.test(ball?.name ?? "") ? (
+                    <p className="mt-2 text-xs text-ink-300">For leather ball, bring your own bat.</p>
+                  ) : null}
                 </div>
 
                 <div className="mt-4">

@@ -115,16 +115,16 @@ export default async function AdminDashboardPage({
       >
         <div className="space-y-4">
           {/* Today's money and what is on the turf — the glance before the gates open. */}
-          <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-pitch-600 via-pitch-700 to-pitch-900 p-4 text-white shadow-md sm:p-5">
-            <FieldLines className="pointer-events-none absolute -right-10 -top-6 h-40 w-60 text-white/[0.08]" />
-            <p className="relative flex items-center gap-2 text-sm font-medium text-pitch-100">
+          <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-pitch-600 via-pitch-700 to-pitch-900 px-4 py-3 text-white shadow-md sm:px-5 sm:py-4">
+            <FieldLines className="pointer-events-none absolute -right-10 -top-6 h-32 w-48 text-white/[0.08]" />
+            <p className="relative flex items-center gap-2 text-xs font-medium text-pitch-100 sm:text-sm">
               <IndianRupee className="h-4 w-4" aria-hidden="true" />
               Collected today
             </p>
-            <p className="relative mt-1 text-3xl font-bold tracking-tight tabular-nums sm:text-4xl">
+            <p className="relative mt-0.5 text-2xl font-bold tracking-tight tabular-nums sm:text-3xl">
               {formatCurrency(collectedToday)}
             </p>
-            <div className="relative mt-3 flex flex-wrap gap-1.5 text-xs sm:text-sm">
+            <div className="relative mt-2 flex flex-wrap gap-1.5 text-xs sm:text-sm">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 font-medium">
                 <CalendarCheck className="h-3.5 w-3.5" aria-hidden="true" />
                 {todayCount} booking{todayCount === 1 ? "" : "s"} today
@@ -139,6 +139,27 @@ export default async function AdminDashboardPage({
               </span>
             </div>
           </section>
+
+          {/* Straight under the money: today's games are what the owner opens this for.
+              Keyed by ground so a sport picked at one ground is not left
+              selected — and greyed out — at the next. */}
+          <TodayAtTurf
+            key={activeId || "all"}
+            nowMin={nowMin}
+            sports={sports}
+            seeAllHref={`/admin/bookings?date=${today}${activeId ? `&locationId=${activeId}` : ""}`}
+            bookings={todayBookings.map((b) => ({
+              id: b._id.toHexString(),
+              reference: b.reference,
+              startMin: b.startMin,
+              endMin: b.endMin,
+              customerName: b.customerName,
+              facilityName: b.facilityName ?? "",
+              resourceName: b.resourceName ?? "",
+              locationName: b.locationName,
+              status: b.status,
+            }))}
+          />
 
           {/* The two that mean "someone is waiting on you" lead, and say so. */}
           <section aria-labelledby="needs-heading">
@@ -177,25 +198,6 @@ export default async function AdminDashboardPage({
             <MiniStat href="/admin/availability" icon={Ban} tone="ink" value={blockedUnits + blockedDays} label="Blocked ahead" />
           </ul>
 
-          {/* Keyed by ground so a sport picked at one ground is not left
-              selected — and greyed out — at the next. */}
-          <TodayAtTurf
-            key={activeId || "all"}
-            nowMin={nowMin}
-            sports={sports}
-            seeAllHref={`/admin/bookings?date=${today}${activeId ? `&locationId=${activeId}` : ""}`}
-            bookings={todayBookings.map((b) => ({
-              id: b._id.toHexString(),
-              reference: b.reference,
-              startMin: b.startMin,
-              endMin: b.endMin,
-              customerName: b.customerName,
-              facilityName: b.facilityName ?? "",
-              resourceName: b.resourceName ?? "",
-              locationName: b.locationName,
-              status: b.status,
-            }))}
-          />
         </div>
       </LocationFilter>
     </div>
