@@ -32,8 +32,11 @@ export function TodayAtTurf({
   sports,
   nowMin,
   seeAllHref,
+  place,
 }: {
   bookings: TodayBooking[];
+  /** Which ground the list is for — "Uppal", or "All venues". */
+  place: string;
   /** Every sport sold anywhere, and whether the ground in view sells it. */
   sports: Array<{ name: string; offered: boolean }>;
   nowMin: number;
@@ -45,15 +48,19 @@ export function TodayAtTurf({
   return (
     <section className="rounded-2xl border border-ink-200 bg-white p-4 shadow-sm sm:p-6" aria-labelledby="today-heading">
       <div className="flex items-center justify-between gap-3">
-        <h2 id="today-heading" className="flex items-center gap-3 text-lg font-bold text-ink-900 sm:text-xl">
-          <span className="grid h-11 w-11 place-items-center rounded-xl bg-pitch-50 text-pitch-700">
+        <h2 id="today-heading" className="flex min-w-0 items-center gap-3 text-lg font-bold text-ink-900 sm:text-xl">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-pitch-50 text-pitch-700">
             <CalendarDays className="h-6 w-6" aria-hidden="true" />
           </span>
-          Today at the turf
+          {/* One line: a long ground name shortens with "…" rather than pushing
+              "See all" onto two lines. */}
+          <span className="min-w-0 truncate">
+            Today <span className="font-semibold text-ink-500">· {place}</span>
+          </span>
         </h2>
         <Link
           href={seeAllHref}
-          className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 text-sm font-medium text-pitch-700 hover:bg-pitch-50"
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2 text-sm font-medium text-pitch-700 hover:bg-pitch-50"
         >
           See all
           <ArrowRight className="h-4 w-4" aria-hidden="true" />

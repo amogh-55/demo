@@ -3,6 +3,7 @@
 import * as React from "react";
 import { api, errorMessage } from "@/lib/client";
 import { ChevronDown } from "lucide-react";
+import { isPastSlot } from "@/lib/booking/schedule";
 import { formatBusinessDate, formatCompactRange, formatRange } from "@/lib/time";
 import { Alert, Button, Spinner, StatusBadge, cn, formatCurrency } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -71,55 +72,70 @@ const BLOCK_REASONS = ["Tournament", "Maintenance", "Private event", "Weather"];
  * only produced a refusal after the owner had picked a reason and pressed Block,
  * so the grid says no where the answer is actually decided.
  *
- * PAST is the same argument about the clock: closing a time that has already been
- * and gone changes nothing, and offering it invites the owner to think it did.
+ * The clock is the same argument: closing or re-opening a time that has already
+ * started changes nothing, and offering it invites the owner to think it did.
+ * It is read from the clock, not the status, because a slot blocked earlier
+ * still says BLOCKED after its time has gone.
  */
-function isSelectable(unit: DayUnit | undefined): boolean {
-  return Boolean(unit) && unit!.status !== "BOOKED" && unit!.status !== "PAST";
+function isSelectable(unit: DayUnit | undefined, date: string): boolean {
+  return Boolean(unit) && unit!.status !== "BOOKED" && !isPastSlot(date, unit!.startMin, new Date());
 }
+
+/** A selection is all blocked slots (to re-open) or all open ones (to block) — never both. */
+const isBlocked = (unit: DayUnit | undefined) => unit?.status === "BLOCKED";
 
 /** One slot in the grid. Extracted because the flat list and the hour accordion draw the same thing. */
 function SlotTile({
   unit,
+  date,
   selected,
   priceLabel,
   onClick,
 }: {
   unit: DayUnit;
+  date: string;
   selected: boolean;
   priceLabel: string;
   onClick: () => void;
 }) {
-  const selectable = isSelectable(unit);
+  const selectable = isSelectable(unit, date);
+  const past = unit.status === "PAST" || isPastSlot(date, unit.startMin, new Date());
   return (
     <button
       type="button"
       aria-pressed={selected}
       disabled={!selectable}
       onClick={onClick}
-      title={selectable ? undefined : unit.status === "PAST" ? "That time has already passed" : "Confirmed bookings cannot be blocked"}
+      title={selectable ? undefined : past ? "That time has already passed" : "Confirmed bookings cannot be blocked"}
       className={cn(
         "w-full rounded-lg border p-3 text-left transition-colors",
         !selectable
           ? "cursor-not-allowed border-ink-200 bg-ink-50 opacity-70"
           : selected
-            ? "border-pitch-600 ring-2 ring-pitch-600"
-            : "border-ink-200 hover:bg-ink-50",
+            ? // Filled, not just outlined: an outline alone was easy to miss at arm's length.
+              "border-pitch-600 bg-pitch-600 shadow-md ring-2 ring-pitch-600/30"
+            : "border-ink-200 bg-white hover:bg-ink-50",
       )}
     >
       {/* Two columns on a 320px phone leave no room for time and badge side by
           side, so the badge is allowed to drop onto its own line. */}
       <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <span className="text-sm font-semibold text-ink-900">{formatCompactRange(unit.startMin, unit.endMin)}</span>
+        <span className={cn("text-sm font-semibold", selected ? "text-white" : "text-ink-900")}>
+          {formatCompactRange(unit.startMin, unit.endMin)}
+        </span>
         <StatusBadge status={unit.status} />
       </span>
-      <span className="mt-1 block text-xs text-ink-500">{priceLabel}</span>
+      <span className={cn("mt-1 block text-xs", selected ? "text-pitch-50" : "text-ink-500")}>{priceLabel}</span>
       {unit.booking ? (
-        <span className="mt-1 block truncate text-xs text-ink-600">
+        <span className={cn("mt-1 block truncate text-xs", selected ? "text-pitch-50" : "text-ink-600")}>
           {unit.booking.customerName} · {unit.booking.reference}
         </span>
       ) : null}
-      {unit.blockReason ? <span className="mt-1 block truncate text-xs text-ink-600">{unit.blockReason}</span> : null}
+      {unit.blockReason ? (
+        <span className={cn("mt-1 block truncate text-xs", selected ? "text-pitch-50" : "text-ink-600")}>
+          {unit.blockReason}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -257,7 +273,8 @@ export function AvailabilityManager({
     // A confirmed booking can never be blocked over, so it is not selectable.
     // Letting it be picked only moved the refusal to the confirmation dialog,
     // after the owner had already chosen a reason and pressed Block.
-    if (!isSelectable(units.find((u) => u.startMin === startMin))) return;
+    const unit = units.find((u) => u.startMin === startMin);
+    if (!unit || !isSelectable(unit, date)) return;
     setSelected((current) => {
       if (current.length === 0) return [startMin];
 
@@ -270,13 +287,21 @@ export function AvailabilityManager({
         return [startMin];
       }
 
-      const indexOf = (min: number) => units.findIndex((u) => u.startMin === min);
-      const clicked = indexOf(startMin);
-      if (clicked === indexOf(first) - 1) return [startMin, ...current];
-      if (clicked === indexOf(last) + 1) return [...current, startMin];
+      // Blocked and open slots never share a selection: one button would block
+      // some and re-open others. Tapping the other kind starts over from it.
+      if (isBlocked(unit) !== isBlocked(units.find((u) => u.startMin === first))) return [startMin];
+
+      // Next to the selection in time, not just in the list: with the night
+      // closed from 2 to 6 AM, 1:45 AM and 6 AM sit side by side in the list.
+      const lastUnit = units.find((u) => u.startMin === last);
+      if (unit.endMin === first) return [startMin, ...current];
+      if (lastUnit && startMin === lastUnit.endMin) return [...current, startMin];
       return [startMin];
     });
   }
+
+  /** Whether the selection is blocked slots, so its one action is Re-open rather than Block. */
+  const reopening = isBlocked(units.find((u) => u.startMin === selected[0]));
 
   /** Exactly one id — the server expands a facility or ground into its courts. */
   const target = (scope: BlockScope) =>
@@ -489,7 +514,8 @@ export function AvailabilityManager({
         ) : (
           <>
             <p className="mt-2 text-sm text-ink-600">
-              Select slots to block or re-open. Slots with a confirmed booking are shown greyed and cannot be selected.
+              Tap open slots to block them, or blocked slots to re-open them. Past times and confirmed bookings are
+              greyed out and cannot be picked.
             </p>
             {splitByQuarter ? (
               /* A bowling machine sells quarter-hours, so a day is 68 buttons. Grouped
@@ -528,6 +554,7 @@ export function AvailabilityManager({
                             <li key={unit.startMin}>
                               <SlotTile
                                 unit={unit}
+                                date={date}
                                 selected={selected.includes(unit.startMin)}
                                 priceLabel={priceLabel(unit)}
                                 onClick={() => toggle(unit.startMin)}
@@ -546,6 +573,7 @@ export function AvailabilityManager({
                   <li key={unit.startMin}>
                     <SlotTile
                       unit={unit}
+                      date={date}
                       selected={selected.includes(unit.startMin)}
                       priceLabel={priceLabel(unit)}
                       onClick={() => toggle(unit.startMin)}
@@ -555,39 +583,53 @@ export function AvailabilityManager({
               </ul>
             )}
 
-            {selectedRange ? (
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-ink-200 bg-ink-50 p-4">
-                <p className="min-w-0 text-sm font-medium text-ink-800">
-                  {formatRange(selectedRange.startMin, selectedRange.endMin)} selected
-                  <span className="ml-1.5 font-normal text-ink-600">
-                    ({selected.length} slot{selected.length === 1 ? "" : "s"})
-                  </span>
-                </p>
-                <div className="flex w-full gap-2 sm:w-auto">
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    className="h-11 flex-1 sm:h-9 sm:flex-none"
-                    onClick={() => setDialog("BLOCK_SLOTS")}
-                    disabled={busy}
-                  >
-                    Block selected
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="h-11 flex-1 sm:h-9 sm:flex-none"
-                    onClick={() => void unblock("SLOTS")}
-                    disabled={busy}
-                  >
-                    Re-open selected
-                  </Button>
-                </div>
-              </div>
-            ) : null}
+            {/* Room under the last row, so the floating bar never covers it. */}
+            {selectedRange ? <div className="h-20" aria-hidden="true" /> : null}
           </>
         )}
       </section>
+
+      {/* The action floats with the selection, the way the customer's Continue
+          does: after scrolling down to 9 PM the owner should not have to hunt for
+          the button. One action only — Block for open slots, Re-open for blocked
+          ones — because that is all a selection can be. */}
+      {selectedRange ? (
+        <div className="fixed inset-x-0 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-30 px-3 lg:bottom-4 lg:left-60">
+          <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-full border border-ink-200 bg-white py-2 pl-5 pr-2 shadow-[0_8px_30px_rgba(0,0,0,0.18)]">
+            <p className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-ink-900">
+                {formatRange(selectedRange.startMin, selectedRange.endMin)}
+              </span>
+              <span className="block text-xs text-ink-500">
+                {selected.length} {reopening ? "blocked " : ""}slot{selected.length === 1 ? "" : "s"}
+              </span>
+            </p>
+            <button
+              type="button"
+              onClick={() => setSelected([])}
+              disabled={busy}
+              className="h-11 shrink-0 rounded-full px-3 text-sm font-medium text-ink-600 hover:bg-ink-100"
+            >
+              Clear
+            </button>
+            {reopening ? (
+              <Button className="h-11 shrink-0 rounded-full px-5" onClick={() => void unblock("SLOTS")} disabled={busy}>
+                {busy ? <Spinner /> : null}
+                Re-open
+              </Button>
+            ) : (
+              <Button
+                variant="danger"
+                className="h-11 shrink-0 rounded-full px-5"
+                onClick={() => setDialog("BLOCK_SLOTS")}
+                disabled={busy}
+              >
+                Block
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={dialog === "BLOCK_SLOTS"}

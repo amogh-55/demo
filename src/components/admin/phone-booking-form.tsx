@@ -5,8 +5,9 @@ import Link from "next/link";
 import { Check, ChevronDown, CircleCheck, IndianRupee, MapPin, User } from "lucide-react";
 import { api, errorMessage } from "@/lib/client";
 import { hoursTouched, sessionStartFor } from "@/lib/booking/schedule";
+import { tenDigitMobile } from "@/lib/phone";
 import { formatBusinessDate, formatCompactRange, formatMinutes, formatRange } from "@/lib/time";
-import { Alert, Button, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
+import { Alert, Button, FieldError, Spinner, cn, formatCurrency } from "@/components/ui/primitives";
 
 export interface ManualBookingFacility {
   id: string;
@@ -124,6 +125,8 @@ export function PhoneBookingForm({
 
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
+  /** Left the number box once — complaining about "98" while it is still being typed is noise. */
+  const [phoneTouched, setPhoneTouched] = React.useState(false);
   const [collected, setCollected] = React.useState("0");
   const [note, setNote] = React.useState("");
 
@@ -151,6 +154,13 @@ export function PhoneBookingForm({
     setTooShortAt(null);
   }, [resourceId, date, overs]);
 
+  // "This slot was just taken" is about the slot that was picked. Once another
+  // time, court, date or ball is chosen it is stale, and left up it reads as
+  // though the new choice had failed too.
+  React.useEffect(() => {
+    setError(null);
+  }, [picked, resourceId, date, overs, ballTypeId]);
+
   const loadDay = React.useCallback(async () => {
     if (!resourceId || !date) return;
     setLoadingDay(true);
@@ -175,6 +185,7 @@ export function PhoneBookingForm({
     setTooShortAt(null);
     setName("");
     setPhone("");
+    setPhoneTouched(false);
     setCollected("0");
     setNote("");
     setError(null);
@@ -249,9 +260,26 @@ export function PhoneBookingForm({
 
   const collectedNumber = Number(collected || 0);
   const collectedValid = Number.isFinite(collectedNumber) && collectedNumber >= 0 && collectedNumber <= total;
-  const phoneDigits = phone.replace(/\D/g, "").slice(-10);
-  const whoValid = name.trim().length >= 2 && /^[6-9]\d{9}$/.test(phoneDigits);
+  // +91 98765 43210, 919876543210 and 09876543210 are all the same number. Taking
+  // the last ten digits of whatever was typed used to accept a mistyped 12-digit
+  // number as someone else's.
+  const phoneDigits = tenDigitMobile(phone);
+  const phoneDigitCount = phone.replace(/\D/g, "").length;
+  const phoneProblem =
+    phone.trim() && !phoneDigits && (phoneTouched || phoneDigitCount >= 10)
+      ? "Enter a 10-digit mobile number. +91 or 91 in front is fine."
+      : null;
+  const whoValid = name.trim().length >= 2 && phoneDigits !== null;
   const canSave = !saving && contiguous && whoValid && collectedValid && (!isOvers || Boolean(ballTypeId));
+
+  /** Why Add booking is greyed out, in the order the form is filled in. */
+  const missing = [
+    !contiguous ? "pick a time" : null,
+    isOvers && !ballTypeId ? "choose a ball" : null,
+    name.trim().length < 2 ? "enter the customer's name" : null,
+    !phoneDigits ? "enter a 10-digit mobile number" : null,
+    !collectedValid ? "fix the amount collected" : null,
+  ].filter((m): m is string => m !== null);
 
   /**
    * The same rule as the customer's booking page: tap where it starts, then tap
@@ -324,8 +352,13 @@ export function PhoneBookingForm({
    * Free is drawn free whatever the overs. A free 11:45 PM used to grey out when
    * 20 overs from there would run past midnight, and read as somebody's booking;
    * now tapping it slides the session back to 11:30 so it still fits.
+   *
+   * A plain function, not a component declared in here: a component made inside
+   * a render is a new type every render, so React rebuilt every tile whenever
+   * anything changed — and a tap whose button is rebuilt between finger-down and
+   * finger-up never arrives. Leaving the mobile box and tapping a time did that.
    */
-  const SlotButton = ({ unit }: { unit: DayUnit }) => {
+  const slotButton = (unit: DayUnit) => {
     const free = unit.status === "AVAILABLE";
     const selected = selectedUnits.some((u) => u.startMin === unit.startMin);
     const { startMin: sessionStart, room } = isOvers && free ? startFor(unit.startMin) : { startMin: null, room: 0 };
@@ -349,6 +382,7 @@ export function PhoneBookingForm({
               : `From ${formatMinutes(sessionStart)}`;
     return (
       <button
+        key={unit.startMin}
         type="button"
         disabled={!free}
         title={unit.booking ? `${unit.booking.customerName} · ${unit.booking.reference}` : undefined}
@@ -516,9 +550,7 @@ export function PhoneBookingForm({
                     </button>
                     {openNow ? (
                       <div className="grid grid-cols-2 gap-1.5 border-t border-ink-100 p-2 sm:grid-cols-4">
-                        {own.map((unit) => (
-                          <SlotButton key={unit.startMin} unit={unit} />
-                        ))}
+                        {own.map(slotButton)}
                       </div>
                     ) : null}
                     {openNow && tooShortAt !== null && own.some((u) => u.startMin === tooShortAt) ? (
@@ -533,9 +565,7 @@ export function PhoneBookingForm({
             </div>
           ) : (
             <div className="grid max-h-[40dvh] grid-cols-3 gap-1.5 overflow-y-auto pr-1 sm:max-h-[46dvh] sm:grid-cols-4">
-              {units.map((unit) => (
-                <SlotButton key={unit.startMin} unit={unit} />
-              ))}
+              {units.map(slotButton)}
             </div>
           )}
 
@@ -574,11 +604,15 @@ export function PhoneBookingForm({
               <input
                 className="field-input"
                 value={phone}
-                inputMode="numeric"
+                inputMode="tel"
                 onChange={(e) => setPhone(e.target.value)}
+                onBlur={() => setPhoneTouched(true)}
                 placeholder="9876543210"
                 autoComplete="off"
+                aria-invalid={phoneProblem ? true : undefined}
+                aria-describedby={phoneProblem ? "phone-error" : undefined}
               />
+              {phoneProblem ? <FieldError id="phone-error">{phoneProblem}</FieldError> : null}
             </label>
           </div>
         </Step>
@@ -667,6 +701,12 @@ export function PhoneBookingForm({
             <span className="text-lg font-bold text-ink-900">{contiguous ? formatCurrency(total) : "—"}</span>
           </p>
         </div>
+
+        {!canSave && !saving && missing.length > 0 ? (
+          <p className="mt-2 text-sm text-amber-800">
+            To add this booking, {missing.join(", ")}.
+          </p>
+        ) : null}
 
         <div className="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button variant="secondary" className="h-11" disabled={saving} onClick={reset}>

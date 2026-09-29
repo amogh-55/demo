@@ -145,6 +145,11 @@ export default async function AdminDashboardPage({
               selected — and greyed out — at the next. */}
           <TodayAtTurf
             key={activeId || "all"}
+            place={
+              activeIds.length === 0
+                ? "All venues"
+                : locations.filter((l) => activeIds.includes(l._id.toHexString())).map((l) => l.name).join(", ")
+            }
             nowMin={nowMin}
             sports={sports}
             seeAllHref={`/admin/bookings?date=${today}${activeId ? `&locationId=${activeId}` : ""}`}

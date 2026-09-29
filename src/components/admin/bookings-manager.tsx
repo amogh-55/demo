@@ -357,6 +357,10 @@ export function BookingsManager({
       </div>
 
       <section className="space-y-3" aria-label="Find bookings">
+        {/* The grounds first, one at a time or All — the same switch as the
+            dashboard, so moving between grounds works the same everywhere. */}
+        <GroundChips locations={locations} value={locationId} onChange={setLocationId} />
+
         {/*
           A form only so the phone keyboard shows a Search key. The list already
           follows the typing, so pressing it just puts the keyboard away and the
@@ -395,10 +399,6 @@ export function BookingsManager({
             </button>
           ) : null}
         </form>
-
-        {/* The grounds as buttons: the owner thinks "what is on at Uppal", and one
-            tap beats opening a list. Several can be on at once. */}
-        <GroundChips locations={locations} value={locationId} onChange={setLocationId} />
 
         {/* Three pills, each a native control underneath: the phone's own date
             and list pickers, which are faster to use than anything drawn here. */}

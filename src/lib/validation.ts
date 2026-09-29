@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ObjectId } from "mongodb";
 import { isValidBusinessDate, MINUTES_IN_DAY } from "./time";
 import { openSlotStarts, openWindows } from "./booking/schedule";
+import { tenDigitMobile } from "./phone";
 import type { PriceRule } from "./types";
 
 export const objectIdSchema = z
@@ -21,17 +22,12 @@ export const minuteOfDaySchema = z.number().int().min(0).max(MINUTES_IN_DAY);
  * "91" on sight is wrong: 9121563584 is a real mobile that begins 91, and taking
  * two digits off it left eight and a customer who could not book at all.
  */
-export const phoneSchema = z
-  .string()
-  .trim()
-  .transform((raw) => raw.replace(/[\s()\-.]/g, ""))
-  .transform((v) => {
-    const digits = v.replace(/^\+/, "").replace(/^00/, "");
-    if (/^91\d{10}$/.test(digits)) return digits.slice(2);
-    if (/^0\d{10}$/.test(digits)) return digits.slice(1);
-    return digits;
-  })
-  .refine((v) => /^[6-9]\d{9}$/.test(v), "Enter a valid 10-digit Indian mobile number");
+export const phoneSchema = z.string().transform((raw, ctx) => {
+  const phone = tenDigitMobile(raw);
+  if (phone) return phone;
+  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid 10-digit Indian mobile number" });
+  return z.NEVER;
+});
 
 export const customerNameSchema = z
   .string()

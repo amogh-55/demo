@@ -6,24 +6,9 @@ import { Spinner } from "@/components/ui/primitives";
 import { cn } from "@/components/ui/primitives";
 
 /**
- * Tapping a ground adds it to the selection or takes it out. "All grounds" —
- * and picking every ground, or none — is the empty selection, so there is one
- * way to write "everything" in a URL. Ids stay in the list's own order, so the
- * same grounds always make the same query.
- */
-export function toggleGround(value: string, id: string, allIds: string[]): string {
-  if (!id) return "";
-  const picked = new Set(value.split(",").filter(Boolean));
-  if (picked.has(id)) picked.delete(id);
-  else picked.add(id);
-  const next = allIds.filter((g) => picked.has(g));
-  return next.length === allIds.length ? "" : next.join(",");
-}
-
-/**
  * The grounds as small buttons that all fit across a phone, with no sideways
- * scrolling; one or several can be on at once. `value` is the comma-joined ids,
- * "" for all.
+ * scrolling. One at a time, or All: several on at once made it hard to tell
+ * which ground the figures below were for. `value` is the ground id, "" for all.
  */
 export function GroundChips({
   locations,
@@ -39,7 +24,6 @@ export function GroundChips({
   label?: string;
 }) {
   const picked = value.split(",").filter(Boolean);
-  const allIds = locations.map((l) => l.id);
   return (
     <div role="group" aria-label={label} className="flex flex-wrap gap-1.5">
       {[{ id: "", name: "All grounds" }, ...locations].map((ground) => {
@@ -49,7 +33,7 @@ export function GroundChips({
             key={ground.id || "all"}
             type="button"
             aria-pressed={on}
-            onClick={() => onChange(toggleGround(value, ground.id, allIds))}
+            onClick={() => onChange(ground.id)}
             className={cn(
               "flex h-9 flex-[1_0_auto] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors sm:h-10 sm:flex-none sm:px-4 sm:text-sm",
               on ? "bg-pitch-600 text-white shadow-sm" : "bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50",
@@ -67,7 +51,7 @@ export function GroundChips({
 }
 
 /**
- * Scopes a server-rendered admin page to one or more grounds.
+ * Scopes a server-rendered admin page to one ground, or all of them.
  *
  * The choice lives in the URL rather than in component state, so the page stays a
  * server component, a filtered view can be bookmarked or sent to someone, and a
