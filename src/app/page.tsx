@@ -26,6 +26,7 @@ import { Button, formatCurrency } from "@/components/ui/primitives";
 import { GroundDialog } from "@/components/customer/ground-dialog";
 import { GroundsShowcase } from "@/components/customer/grounds-showcase";
 import { ScrollToTop, SiteHeader } from "@/components/customer/site-chrome";
+import { LEGAL_LINKS } from "@/components/customer/legal-page";
 import { whatsappUrl } from "@/lib/whatsapp";
 
 /*
@@ -427,15 +428,21 @@ export default async function HomePage() {
         <div className="container flex flex-col gap-4 text-sm text-ink-500 sm:flex-row sm:items-center sm:justify-between">
           <p>
             © {new Date().getFullYear()} {settings.businessName}
-            <span className="ml-2 text-xs">· Developed by Amogh</span>
+            <span className="ml-2 whitespace-nowrap text-xs">· Developed by Amogh</span>
           </p>
-          <div className="-my-2 flex flex-wrap items-center gap-x-5">
+          {/* Clear of the back-to-top button, which is fixed over the bottom-right corner. */}
+          <div className="-my-2 flex flex-wrap items-center gap-x-5 sm:pr-14">
             <a href="#grounds" className="py-2 hover:text-ink-300">
               Grounds
             </a>
             <a href="#facilities" className="py-2 hover:text-ink-300">
               Facilities
             </a>
+            {LEGAL_LINKS.map((l) => (
+              <Link key={l.href} href={l.href} className="py-2 hover:text-ink-300">
+                {l.label}
+              </Link>
+            ))}
             <Link href="/admin" className="py-2 hover:text-ink-300">
               Staff login
             </Link>

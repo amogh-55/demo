@@ -199,7 +199,10 @@ export default async function BookingSuccessPage() {
                 ) : null}
               </ol>
               <p className="mt-3 border-t border-lime-200/40 pt-2 text-lime-100">
-                <strong>This slot is yours.</strong> To change or cancel it, message us on WhatsApp.
+                <strong>This slot is yours.</strong> Bookings are final — no cancellations or refunds.{" "}
+                <Link href="/refund-policy" className="underline underline-offset-2 hover:text-white">
+                  Refund policy
+                </Link>
               </p>
             </div>
           ) : rejected ? (
