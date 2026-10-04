@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requireAdminPage } from "@/lib/admin-page";
 import { collections, getDb } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { razorpayConfigured, razorpayLiveMode, razorpayWebhookConfigured } from "@/lib/razorpay";
@@ -13,6 +14,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings", robots: { index: false } };
 
 export default async function AdminSettingsPage() {
+  await requireAdminPage();
   const db = await getDb();
   /**
    * Facilities and courts are fetched here rather than by the client after it

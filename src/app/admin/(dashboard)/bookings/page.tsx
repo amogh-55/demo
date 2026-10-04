@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { listBookings } from "@/lib/booking/admin-list";
+import { requireAdminPage } from "@/lib/admin-page";
 import { collections, getDb } from "@/lib/db";
 import { istDateString } from "@/lib/time";
 import { adminBookingsQuerySchema } from "@/lib/validation";
@@ -22,6 +23,7 @@ export default async function AdminBookingsPage({
     sport?: string;
   }>;
 }) {
+  await requireAdminPage();
   const filters = await searchParams;
   const db = await getDb();
   const [locations, sports, initialList] = await Promise.all([

@@ -427,6 +427,7 @@ export default async function HomePage() {
         <div className="container flex flex-col gap-4 text-sm text-ink-500 sm:flex-row sm:items-center sm:justify-between">
           <p>
             © {new Date().getFullYear()} {settings.businessName}
+            <span className="ml-2 text-xs">· Developed by Amogh</span>
           </p>
           <div className="-my-2 flex flex-wrap items-center gap-x-5">
             <a href="#grounds" className="py-2 hover:text-ink-300">

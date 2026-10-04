@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { TO_VERIFY, upcomingFilter } from "@/lib/booking/admin-list";
+import { requireAdminPage } from "@/lib/admin-page";
 import { collections, getDb } from "@/lib/db";
 import { formatCompactRange, istDateString, istMinutesOfDay } from "@/lib/time";
 import { cn, formatCurrency } from "@/components/ui/primitives";
@@ -29,6 +30,7 @@ export default async function AdminDashboardPage({
 }: {
   searchParams: Promise<{ locationId?: string }>;
 }) {
+  await requireAdminPage();
   const db = await getDb();
   const today = istDateString();
   const nowMin = istMinutesOfDay();

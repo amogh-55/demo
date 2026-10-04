@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requireAdminPage } from "@/lib/admin-page";
 import { collections, getDb } from "@/lib/db";
 import { istDateString } from "@/lib/time";
 import { AvailabilityManager } from "@/components/admin/availability-manager";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Availability", robots: { index: false } };
 
 export default async function AdminAvailabilityPage() {
+  await requireAdminPage();
   const db = await getDb();
   const [locations, facilities, resources] = await Promise.all([
     collections.locations(db).find({}).sort({ name: 1 }).toArray(),

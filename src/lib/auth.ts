@@ -7,7 +7,12 @@ import { appError } from "./errors";
 import { log } from "./log";
 
 const SESSION_COOKIE = "turf_admin_session";
-const SESSION_TTL_SECONDS = 60 * 60 * 8; // 8 hours
+/*
+ * 30 days, at the owner's request: staff run the grounds from their phones and
+ * expect to stay signed in until they press Sign out. A lost phone stays signed
+ * in until then — changing ADMIN_AUTH_SECRET signs every device out at once.
+ */
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const SCRYPT_KEYLEN = 64;
 
 function secret(): string {

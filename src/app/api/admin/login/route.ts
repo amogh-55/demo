@@ -21,7 +21,11 @@ export async function POST(request: Request) {
     if (!session) throw appError("UNAUTHORIZED", "Incorrect username or password.");
 
     await startSession(session);
+    // Both counters, so only wrong passwords ever add up. Several staff signing
+    // in and out on one ground's Wi-Fi share an address, and counting their
+    // successful logins would lock all of them out for the rest of the window.
     await resetRateLimit(`login-user:${input.username.toLowerCase()}`);
+    await resetRateLimit(`login-ip:${ip}`);
 
     return ok({ user: { username: session.username, displayName: session.displayName } });
   } catch (err) {

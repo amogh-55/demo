@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requireAdminPage } from "@/lib/admin-page";
 import { collections, getDb } from "@/lib/db";
 import { istDateString } from "@/lib/time";
 import { EmptyState } from "@/components/ui/primitives";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Phone booking", robots: { index: false } };
 
 export default async function AdminPhoneBookingPage() {
+  await requireAdminPage();
   const db = await getDb();
   // Only ACTIVE things can still be sold, over the phone as much as online.
   const [locations, facilities, resources] = await Promise.all([
