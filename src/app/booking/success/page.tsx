@@ -75,7 +75,14 @@ export default async function BookingSuccessPage() {
    * that customer owes money, but at the gate, and nothing is being asked of
    * them here.
    */
-  const shortOnline = Math.max(0, dueNow - booking.amountPaid);
+  /**
+   * A screenshot is with the turf and not reviewed yet. amountPaid only counts
+   * ACCEPTED payments, so it reads ₹0 until then — and the page told a customer
+   * who had just paid that nothing was received and to pay again.
+   */
+  const underReview =
+    booking.paymentVerificationStatus === "PENDING" || booking.payments?.some((p) => p.status === "PENDING");
+  const shortOnline = underReview ? 0 : Math.max(0, dueNow - booking.amountPaid);
 
   return (
     <div className="min-h-dvh bg-ink-950">
@@ -175,7 +182,10 @@ export default async function BookingSuccessPage() {
             <div className="mt-5 rounded-lg border border-amber-400/40 bg-amber-400/15 p-4 text-sm">
               <p className="font-semibold text-amber-100">Balance due: {formatCurrency(shortOnline)}</p>
               <p className="mt-1 text-amber-100">
-                We received {formatCurrency(booking.amountPaid)} of the {formatCurrency(dueNow)} due now.{" "}
+                {/* Nothing accepted and nothing under review: every screenshot was turned down. */}
+                {booking.amountPaid > 0
+                  ? `We received ${formatCurrency(booking.amountPaid)} of the ${formatCurrency(dueNow)} due now.`
+                  : "We could not verify the payment you sent."}{" "}
                 <strong>Your slot is still reserved.</strong> Please pay the balance and send us the screenshot to
                 confirm your booking.
               </p>
